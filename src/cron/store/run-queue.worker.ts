@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
@@ -11,6 +12,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "../service/admission-deferred.js";
 import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob } from "../types.js";
@@ -31,7 +33,7 @@ import {
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
-import { parseCronScheduledRunId } from "./run-request-id.js";
+import { createCronScheduledRunId, parseCronScheduledRunId } from "./run-request-id.js";
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
@@ -76,7 +78,8 @@ function skipRequest(
     database: db,
     receiptSchema,
     handle,
-    pendingReceiptId: job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
+    pendingReceiptId:
+      job?.state.runningAtMs === undefined ? handle.receiptId : job.state.runningReceiptId,
     status,
     finishedAtMs: nowMs,
     error,
@@ -131,6 +134,29 @@ function requestCronRunsInDatabase(
   for (const request of input.requests) {
     const job = jobs.get(request.jobId);
     const timed = parseCronScheduledRunId(request.receiptId);
+    // A retry can outlive its original receipt; the latest retained attempt owns the slot.
+    let existing =
+      request.mode === "scheduled" && timed
+        ? executeSqliteQuerySync(
+            db,
+            query(db)
+              .selectFrom("cron_run_receipts")
+              .select(["receipt_id", "status", "error_text"])
+              .where("store_key", "=", input.storeKey)
+              .where("job_id", "=", request.jobId)
+              .orderBy("cursor_id", "desc"),
+          ).rows.find((row) => {
+            const slot = parseCronScheduledRunId(row.receipt_id);
+            return (
+              slot?.storeKey === input.storeKey &&
+              slot.jobId === request.jobId &&
+              slot.scheduledSlotMs === timed.scheduledSlotMs
+            );
+          })
+        : undefined;
+    const deferred =
+      existing?.status === "skipped" &&
+      existing.error_text === CRON_ADMISSION_DEFERRED_RECEIPT_ERROR;
     let reason: string | undefined;
     if (!job || job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined) {
       reason = job ? "already-running" : "job-removed";
@@ -147,6 +173,9 @@ function requestCronRunsInDatabase(
     ) {
       reason = "job-ineligible";
     }
+    if (existing && !deferred) {
+      reason = "already-requested";
+    }
     let runReceipt: CronRunReceiptHandle | undefined;
     if (!reason && job) {
       const agentId = tryResolveCronJobEffectiveAgentId(job, input.defaultAgentId);
@@ -160,7 +189,16 @@ function requestCronRunsInDatabase(
         runReceipt = claimCronRunReceiptInDatabase({
           database: db,
           handle: {
-            receiptId: request.receiptId,
+            // An unstarted attempt retains its slot, but the retry needs its own fence.
+            receiptId:
+              deferred && timed
+                ? createCronScheduledRunId(
+                    input.storeKey,
+                    job.id,
+                    timed.scheduledSlotMs,
+                    randomUUID(),
+                  )
+                : request.receiptId,
             storeKey: input.storeKey,
             jobId: job.id,
             configRevision: request.configRevision,
@@ -174,16 +212,17 @@ function requestCronRunsInDatabase(
       }
     }
     if (!runReceipt || !job) {
-      // Only rejected requests need the existing receipt's reason and consumed-slot repair.
-      const existing = executeSqliteQueryTakeFirstSync(
+      // Other requests need receipt inspection only after the claim rejects.
+      existing ??= executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .selectFrom("cron_run_receipts")
-          .select("status")
+          .select(["receipt_id", "status", "error_text"])
           .where("receipt_id", "=", request.receiptId),
       );
       if (existing) {
         if (
+          !deferred &&
           existing.status !== "running" &&
           job &&
           timed &&

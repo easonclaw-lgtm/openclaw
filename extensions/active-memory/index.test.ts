@@ -678,11 +678,10 @@ describe("active-memory plugin", () => {
         },
       },
     };
-    for (const key of Object.keys(hoisted.sessionStore)) {
-      delete hoisted.sessionStore[key];
-    }
-    for (const key of Object.keys(hoisted.runtimeTranscriptFiles)) {
-      delete hoisted.runtimeTranscriptFiles[key];
+    for (const entries of [hoisted.sessionStore, hoisted.runtimeTranscriptFiles]) {
+      for (const key of Object.keys(entries)) {
+        delete entries[key];
+      }
     }
     hoisted.rawDeltaReads.length = 0;
     seedSession("agent:main:main", "s-main", 0);
@@ -3451,7 +3450,7 @@ describe("active-memory plugin", () => {
 
     const result = await runPromptBuild(
       { prompt: "what wings should i order?" },
-      { trigger: "heartbeat", sessionKey, messageProvider: "webchat" },
+      { trigger: "cron", sessionKey, messageProvider: "webchat" },
     );
 
     expect(result).toBeUndefined();
