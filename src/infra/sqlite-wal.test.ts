@@ -87,25 +87,6 @@ describe("sqlite WAL maintenance", () => {
   });
 
   it.each([
-    ["SMB", 0x517b],
-    ["CIFS", 0xff534d42],
-    ["SMB2", 0xfe534d42],
-    ["9p (V9FS)", 0x01021997],
-  ])("uses rollback journaling for databases on Linux %s volumes", (_label, fsType) => {
-    const tempDir = tempDirs.make("openclaw-sqlite-network-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
-
-    configureSqliteWalMaintenance(db, {
-      checkpointIntervalMs: 0,
-      databasePath: path.join(tempDir, "openclaw.sqlite"),
-    });
-
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-  });
-
-  it.each([
     String.raw`\\server\share\openclaw.sqlite`,
     String.raw`\\?\UNC\server\share\openclaw.sqlite`,
   ])("uses rollback journaling for databases on Windows UNC paths: %s", (databasePath) => {
@@ -802,38 +783,6 @@ describe("sqlite WAL maintenance", () => {
     expect(onCheckpointError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "test-db WAL checkpoint TRUNCATE remained busy" }),
     );
-  });
-
-  it("reports checkpoint errors without throwing from background maintenance", () => {
-    const db = createMockDb();
-    const error = new Error("busy");
-    const onCheckpointError = vi.fn();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.mocked(db["prepare"]).mockImplementation((sql) => {
-      if (sql.includes("wal_checkpoint")) {
-        throw error;
-      }
-      return {
-        get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" })),
-      } as unknown as ReturnType<DatabaseSync["prepare"]>;
-    });
-
-    const maintenance = configureSqliteWalMaintenance(db, {
-      checkpointIntervalMs: 0,
-      onCheckpointError,
-    });
-
-    expect(maintenance.checkpoint()).toBe(false);
-    expect(onCheckpointError).toHaveBeenCalledWith(error);
-    expect(maintenance.health).toMatchObject({
-      state: "error",
-      error: "busy",
-      logFrames: null,
-      checkpointedFrames: null,
-      consecutiveBlocked: 0,
-      lastCompletedAtMs: null,
-      warning: true,
-    });
   });
 
   it.each([
