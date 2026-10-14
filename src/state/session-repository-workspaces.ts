@@ -267,55 +267,38 @@ export function createSessionRepositoryWorkspaceStore(
       );
     },
     async create(input: Guarded<RepositoryWorkspaceCreate>) {
+      const { assertCurrent, ...workspace } = input;
       return requireWorkspace(
         await mutate(
           {
             type: "repositoryWorkspaces.create",
-            input: {
-              agentId: input.agentId,
-              sessionKey: input.sessionKey,
-              url: input.url,
-              requestedRef: input.requestedRef,
-              runSetupScript: input.runSetupScript,
-              branch: input.branch,
-              nowMs: now?.(),
-            },
+            input: { ...workspace, nowMs: now?.() },
           },
-          input.assertCurrent,
+          assertCurrent,
         ),
       );
     },
     async bindBase(input: Guarded<RepositoryWorkspaceBase>) {
+      const { assertCurrent, ...base } = input;
       return requireWorkspace(
         await mutate(
           {
             type: "repositoryWorkspaces.bindBase",
-            input: {
-              workspaceId: input.workspaceId,
-              expectedRevision: input.expectedRevision,
-              baseCommit: input.baseCommit,
-              baseManifestHash: input.baseManifestHash,
-              nowMs: now?.(),
-            },
+            input: { ...base, nowMs: now?.() },
           },
-          input.assertCurrent,
+          assertCurrent,
         ),
       );
     },
     async acceptCheckpoint(input: Guarded<RepositoryWorkspaceCheckpoint>) {
+      const { assertCurrent, ...checkpoint } = input;
       return requireWorkspace(
         await mutate(
           {
             type: "repositoryWorkspaces.acceptCheckpoint",
-            input: {
-              workspaceId: input.workspaceId,
-              expectedRevision: input.expectedRevision,
-              checkpointRef: input.checkpointRef,
-              manifestHash: input.manifestHash,
-              nowMs: now?.(),
-            },
+            input: { ...checkpoint, nowMs: now?.() },
           },
-          input.assertCurrent,
+          assertCurrent,
         ),
       );
     },
