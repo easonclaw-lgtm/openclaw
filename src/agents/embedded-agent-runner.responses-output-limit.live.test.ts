@@ -262,7 +262,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(failures).toEqual([
           expect.objectContaining({
             stopReason: "error",
-            usage: expect.objectContaining({ output: 256 }),
             diagnostics: expect.arrayContaining([
               expect.objectContaining({
                 type: "openai_responses_terminal",
@@ -274,6 +273,8 @@ describeLive("embedded Responses output-limit recovery live", () => {
             ]),
           }),
         ]);
+        // OpenAI can report a few tokens past max_output_tokens on a truncated response.
+        expect(failures[0]?.usage.output).toBeGreaterThanOrEqual(256);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "exec",
