@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -16,6 +17,40 @@ const config = {
   maxPendingToolCalls: 16,
   maxSnapshotBytes: 1024,
 };
+
+it("does not force full collections in a reusable Code Mode worker", async () => {
+  const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
+    workerUrl: new URL("./code-mode-node-idle-gc.test-support.ts", import.meta.url),
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 60, maxYoungGenerationSizeMb: 4 } },
+  });
+  const run = (source: string) =>
+    pool.run(
+      {
+        kind: "exec",
+        source,
+        config,
+        initialization,
+        inlineHost: false,
+        progress: new CodeModeNodeProgress(config.maxOutputBytes).buffer,
+      },
+      { timeoutMs: 5000 },
+    );
+  try {
+    expect(
+      await run("const data = new Array(3 * 1024 * 1024).fill(1); return data.length;"),
+    ).toMatchObject({ status: "completed" });
+    // Observe the native idle path; natural V8 collections are allowed and are not counted.
+    await delay(1500);
+    expect(await run("return idleCollectionRequests();")).toMatchObject({
+      status: "completed",
+      value: { json: "0" },
+    });
+  } finally {
+    await pool.close();
+  }
+});
 
 it.skipIf(process.platform !== "linux")(
   "runs cells without per-evaluation native threads",
