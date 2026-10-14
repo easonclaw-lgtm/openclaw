@@ -40,6 +40,27 @@ describe("resolveGatewayRequestContext", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(clearRuntimeConfigSnapshot);
 
+  it("uses normalized x-openclaw-message-channel", async () => {
+    const result = await resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.messageChannel).toBe("custom-channel");
+  });
+
+  it("includes session prefix and user in generated session key", async () => {
+    const result = await resolveGatewayRequestContext({
+      req: createReq(),
+      model: "openclaw",
+      user: "alice",
+      sessionPrefix: "openresponses",
+    });
+
+    expect(result.sessionKey).toContain("openresponses-user:alice");
+  });
+
   it.each([
     "subagent:worker",
     "cron:daily",
@@ -87,6 +108,42 @@ describe("resolveGatewayRequestContext", () => {
         sessionPrefix: "openai",
       }),
     ).rejects.toThrow(/reserved internal session namespaces/u);
+  });
+
+  it("does not build session state for explicit unknown agent ids", async () => {
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow(/Unknown agent/);
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw/missing-agent",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow(/Unknown agent/);
+
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "!!!" }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow("Unknown agent '!!!'.");
+  });
+
+  it("rejects invalid model syntax before accepting an explicit agent header", async () => {
+    await expect(
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-agent-id": "main" }),
+        model: "gpt-4o",
+        sessionPrefix: "openai",
+      }),
+    ).rejects.toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
   });
 });
 
@@ -196,5 +253,29 @@ describe("authorizeOpenAiCompatibleHttpModelOverride", () => {
         { authMethod: "token", trustDeclaredOperatorScopes: false },
       ),
     ).toEqual({ allowed: true });
+  });
+
+  it("allows trusted admin callers to use x-openclaw-model", () => {
+    expect(
+      authorizeOpenAiCompatibleHttpModelOverride(
+        createReq({
+          "x-openclaw-scopes": "operator.admin, operator.write",
+          "x-openclaw-model": "openai/gpt-5.4",
+        }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
+  it("rejects trusted write-only callers that try to use x-openclaw-model", () => {
+    expect(
+      authorizeOpenAiCompatibleHttpModelOverride(
+        createReq({
+          "x-openclaw-scopes": "operator.write",
+          "x-openclaw-model": "openai/gpt-5.4",
+        }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 });

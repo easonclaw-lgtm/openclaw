@@ -269,7 +269,7 @@ it("prepares managed GitHub exec with the node's own sanitized environment", asy
   expect(invokeCount).toBe(1);
 });
 
-it.each(["GITHUB_TOKEN"])(
+it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
   "rejects explicit %s overrides at both node boundaries even when empty",
   async (key) => {
     for (const value of ["", "explicit-token"]) {
@@ -309,6 +309,34 @@ it.each(["GITHUB_TOKEN"])(
     }
   },
 );
+
+it("auto-reviews an absolute direct command through real node preparation and execution", async () => {
+  resolveDecision({ decision: "deny" });
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "prints fixture output",
+  }));
+  const result = await executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+  });
+
+  expect(autoReviewer).toHaveBeenCalledOnce();
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      argv: ["/usr/bin/printf", "node-policy-proof"],
+      host: "node",
+    }),
+  );
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(false);
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  expect(invokeCount).toBe(1);
+});
 
 it("honors a retained policy-owner deny when another agent is permissive", async () => {
   saveExecApprovals({
@@ -577,7 +605,10 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
   expect(invokeCount).toBe(0);
 });
 
-it.each([{ channel: "a2a", decision: "allow-always" }])(
+it.each([
+  { channel: "webchat", decision: "allow-once" },
+  { channel: "a2a", decision: "allow-always" },
+])(
   "keeps $channel node approval $decision inside the originating tool lifetime",
   async ({ channel, decision }) => {
     let completed = false;
@@ -600,6 +631,16 @@ it.each([{ channel: "a2a", decision: "allow-always" }])(
     expect(invokeCount).toBe(1);
   },
 );
+
+it("prompts for target ask=always even when the caller is full/off", async () => {
+  setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
+  const result = executeNodeHostCommand(request);
+  await Promise.race([decisionEntered.promise, result]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+  expect(invokeCount).toBe(0);
+  resolveDecision({ decision: "allow-once" });
+  expect((await result).details.status).toBe("completed");
+});
 
 it("does not dispatch a late A2A approval after cancellation", async () => {
   const controller = new AbortController();
@@ -750,6 +791,29 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   ]);
 });
 
+it("uses prepared node policy without administrator access", async () => {
+  rawPolicyReadable = false;
+  resolveDecision({ decision: "deny" });
+  saveExecApprovals({
+    version: 1,
+    defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+    agents: {
+      main: { allowlist: [{ pattern: "/usr/bin/printf", argPattern: "^node-policy-proof$" }] },
+    },
+  });
+
+  const result = await executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+  });
+
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  expect(invokeCount).toBe(1);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(false);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
+});
+
 it.each(["empty", "always", "deny"] as const)(
   "keeps prepared %s policy restrictive without fetching raw settings",
   async (mode) => {
@@ -774,7 +838,7 @@ it.each(["empty", "always", "deny"] as const)(
   },
 );
 
-it.each(["argv-miss", "cwd-miss"] as const)(
+it.each(["hit", "argv-miss", "cwd-miss"] as const)(
   "uses prepared cwd-bound rules for an exact %s",
   async (match) => {
     rawPolicyReadable = false;
@@ -806,8 +870,16 @@ it.each(["argv-miss", "cwd-miss"] as const)(
       ...(match === "argv-miss" ? { command: "/usr/bin/printf changed" } : {}),
       ...(match === "cwd-miss" ? { workdir: other } : {}),
     });
-    await expect(execution).rejects.toThrow("user-denied");
-    expect(invokeCount).toBe(0);
+    if (match === "hit") {
+      expect((await execution).details).toMatchObject({
+        status: "completed",
+        aggregated: "node-policy-proof",
+      });
+      expect(invokeCount).toBe(1);
+    } else {
+      await expect(execution).rejects.toThrow("user-denied");
+      expect(invokeCount).toBe(0);
+    }
     expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(false);
   },
 );
@@ -851,9 +923,9 @@ it.each(["exact-command", "patterns"] as const)(
   },
 );
 
-it("rejects snapshot-absent legacy policy without raw policy access", async () => {
+it.each([true, false])("preserves snapshot-absent legacy policy access=%s", async (readable) => {
   legacyPrepare = true;
-  rawPolicyReadable = false;
+  rawPolicyReadable = readable;
   resolveDecision({ decision: "deny" });
   saveExecApprovals({
     version: 1,
@@ -861,8 +933,13 @@ it("rejects snapshot-absent legacy policy without raw policy access", async () =
     agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
   });
   const execution = executeNodeHostCommand({ ...request, security: "allowlist", ask: "on-miss" });
-  await expect(execution).rejects.toThrow("user-denied");
-  expect(invokeCount).toBe(0);
+  if (readable) {
+    expect((await execution).details.status).toBe("completed");
+    expect(invokeCount).toBe(1);
+  } else {
+    await expect(execution).rejects.toThrow("user-denied");
+    expect(invokeCount).toBe(0);
+  }
   expect(rpc.mock.calls.some(([method]) => method === "exec.approvals.node.get")).toBe(true);
 });
 
