@@ -18,7 +18,10 @@ import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 vi.mock("./control-ui-loader.ts", () => ({ initializeControlUiPlugin: vi.fn() }));
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
-vi.mock("./control-ui-distribution.ts", () => ({ controlUiPluginDistributions: packaged }));
+vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-distribution.ts")>()),
+  controlUiPluginDistributions: packaged,
+}));
 
 it.each(["cross-origin", "authenticated HTTP", "pending import"])(
   "loads only the matching distribution and retires same-revision eligibility loss: %s",
@@ -32,7 +35,11 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
       imports: [],
     };
     packaged.push(distribution);
-    let descriptor = { ...distribution, name: "Workboard", entryUrl: "/untrusted-gateway-path.js" };
+    let descriptor: PluginsControlUiCatalog["plugins"][number] = {
+      ...distribution,
+      name: "Workboard",
+      entryUrl: "/untrusted-gateway-path.js",
+    };
     const pending = createDeferred();
     const started = createDeferred();
     const owners: Parameters<typeof initializeControlUiPlugin>[2][] = [];
@@ -87,7 +94,7 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
         await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
       }
       // Same revision, package fields and code; only the loaded owner lost eligibility.
-      descriptor = { ...descriptor, bundledDistribution: undefined } as typeof descriptor;
+      descriptor = { ...descriptor, bundledDistribution: undefined };
       await runtime.refresh();
       pending.resolve();
       expect(owners[0]?.abort.signal.aborted).toBe(true);
