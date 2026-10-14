@@ -770,6 +770,7 @@ async function initSessionStateAttemptLocked(
       !params.bindSessionCreation &&
       routeContext === undefined &&
       !conversationIdentityFromSessionEntry(sessionEntry) &&
+      // SAFETY: sessionEntry is assembled solely from SessionEntry fields.
       (Object.keys(sessionEntry) as Array<keyof SessionEntry>).every((key) =>
         isDeepStrictEqual(sessionEntry[key], entry[key]),
       )
