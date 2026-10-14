@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
   admitPostgresPhysicalFacts,
@@ -35,6 +36,10 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
+  const selected = getDatabaseEngineSelection()?.input;
+  if (selected) {
+    return selected;
+  }
   const connection: unknown =
     process.env.NODE_ENV === "test"
       ? getEnvironmentData("openclaw.test.state.connection")

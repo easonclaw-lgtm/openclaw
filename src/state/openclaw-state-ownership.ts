@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
   assertStateDatabaseAccessAllowed,
   getStateDatabaseSchemaLease,
@@ -277,6 +278,18 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     return;
   }
   const env = options.env ?? process.env;
+  if (getDatabaseEngineSelection()?.input) {
+    const { executeExistingOpenClawStateRead } = await import("./openclaw-state-db-readonly.js");
+    const read = await executeExistingOpenClawStateRead(
+      { path: databasePath, env },
+      { type: "stateBootstrap.ownership", input: { pathname: databasePath } },
+      { current: true, signal: options.signal },
+    );
+    options.signal?.throwIfAborted();
+    assertStateDatabaseAccessAllowed(databasePath);
+    assertOwnershipAllowsWrite(read?.ownership ?? null, databasePath, env);
+    return;
+  }
   // Offline admission belongs to this process. Its live scope/lease cannot be
   // borrowed by a native reader child; retain the private-copy path instead.
   if (

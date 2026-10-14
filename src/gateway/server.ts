@@ -4,6 +4,7 @@
  * Keeping `server-start` behind dynamic import lets light-weight callers import
  * server types and helpers without paying the full startup dependency graph.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -25,59 +26,67 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
-  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-  await initializeSqliteRuntimeCapabilities();
-  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
-  const ownedLock = opts.gatewayStateOwner
-    ? null
-    : await acquireGatewayLock({ port, listenerMode: "foreground" });
-  const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
-  let close: GatewayServer["close"] | undefined;
-  let detachOwner: (() => void) | undefined;
-  try {
-    const { captureGatewayStateOwner } = await import("../infra/gateway-state-owner.js");
-    const { createSubsystemLogger } = await import("../logging/subsystem.js");
-    const log = createSubsystemLogger("gateway");
-    const databasePath = resolveOpenClawStateSqlitePath();
-    gatewayStateOwner?.assertDatabaseAccess(databasePath);
-    const signal = captureGatewayStateOwner(databasePath)?.signal;
-    const onOwnerLost = () => {
-      const reason = String(signal?.reason);
-      const restart = close ? opts.hotReloadRecovery?.(reason) : undefined;
-      if (close && (!restart || restart.status === "failed")) {
-        void close({ reason }).catch((error: unknown) => {
-          log.error(`Gateway lost ownership cleanup failed: ${String(error)}`);
-        });
+  const { withGatewayDatabaseEngine } = await import("./server-database-engine.js");
+  return withGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    async () => {
+      const { initializeSqliteRuntimeCapabilities } =
+        await import("../infra/bun-sqlite-library.js");
+      await initializeSqliteRuntimeCapabilities();
+      const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+      const ownedLock = opts.gatewayStateOwner
+        ? null
+        : await acquireGatewayLock({ port, listenerMode: "foreground" });
+      const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
+      let close: GatewayServer["close"] | undefined;
+      let detachOwner: (() => void) | undefined;
+      try {
+        const { captureGatewayStateOwner } = await import("../infra/gateway-state-owner.js");
+        const { createSubsystemLogger } = await import("../logging/subsystem.js");
+        const log = createSubsystemLogger("gateway");
+        const databasePath = resolveOpenClawStateSqlitePath();
+        gatewayStateOwner?.assertDatabaseAccess(databasePath);
+        const signal = captureGatewayStateOwner(databasePath)?.signal;
+        const onOwnerLost = () => {
+          const reason = String(signal?.reason);
+          const restart = close ? opts.hotReloadRecovery?.(reason) : undefined;
+          if (close && (!restart || restart.status === "failed")) {
+            void close({ reason }).catch((error: unknown) => {
+              log.error(`Gateway lost ownership cleanup failed: ${String(error)}`);
+            });
+          }
+        };
+        signal?.addEventListener("abort", onOwnerLost, { once: true });
+        detachOwner = () => signal?.removeEventListener("abort", onOwnerLost);
+        signal?.throwIfAborted();
+        const server = await startGatewayServerWithRuntime(port, { ...opts, gatewayStateOwner });
+        let closing: Promise<void> | undefined;
+        const closeServer: GatewayServer["close"] = (closeOptions) => {
+          detachOwner?.();
+          return (closing ??= (async () => {
+            await server.close(closeOptions);
+            // A failed join retains ownership: another starter must not enter over live work.
+            await ownedLock?.release();
+          })());
+        };
+        close = closeServer;
+        if (signal?.aborted) {
+          const reason = signal.reason;
+          return await rethrowGatewayStartupError(reason, () =>
+            closeServer({ reason: String(reason) }),
+          );
+        }
+        return { ...server, close: AsyncLocalStorage.bind(close) };
+      } catch (error) {
+        detachOwner?.();
+        if (!close && !(error instanceof GatewayStartupCleanupError)) {
+          await ownedLock?.release();
+        }
+        throw error;
       }
-    };
-    signal?.addEventListener("abort", onOwnerLost, { once: true });
-    detachOwner = () => signal?.removeEventListener("abort", onOwnerLost);
-    signal?.throwIfAborted();
-    const server = await startGatewayServerWithRuntime(port, { ...opts, gatewayStateOwner });
-    let closing: Promise<void> | undefined;
-    const closeServer: GatewayServer["close"] = (closeOptions) => {
-      detachOwner?.();
-      return (closing ??= (async () => {
-        await server.close(closeOptions);
-        // A failed join retains ownership: another starter must not enter over live work.
-        await ownedLock?.release();
-      })());
-    };
-    close = closeServer;
-    if (signal?.aborted) {
-      const reason = signal.reason;
-      return await rethrowGatewayStartupError(reason, () =>
-        closeServer({ reason: String(reason) }),
-      );
-    }
-    return { ...server, close };
-  } catch (error) {
-    detachOwner?.();
-    if (!close && !(error instanceof GatewayStartupCleanupError)) {
-      await ownedLock?.release();
-    }
-    throw error;
-  }
+    },
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
 }
 
 async function startGatewayServerWithRuntime(

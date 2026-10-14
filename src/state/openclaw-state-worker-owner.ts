@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { assertSameDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -503,6 +504,10 @@ function createSharedStateWorkerOwner() {
           if (!matches(candidate, admission.identity)) {
             continue;
           }
+          assertSameDatabaseEngineInput(
+            candidate.context.databaseEngineInput,
+            context.databaseEngineInput,
+          );
           const retirement = retireInvalidEntry(candidate);
           if (retirement) {
             if (retirement.pending) {

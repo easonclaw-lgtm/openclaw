@@ -4,6 +4,7 @@ import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-err
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { withGatewayDatabaseEngine } from "./server-database-engine.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
@@ -19,14 +20,20 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
-  // Join startup through its returned promise without giving resident listeners the boot scope.
-  const start = (signal?: AbortSignal) =>
-    runOutsideAsyncWorkScope(() =>
-      startGatewayServerWithSdkHost(port, opts, sdkResourceHost, signal),
-    );
-  return await sdkResourceHost.run(() =>
-    opts.startupOperation ? opts.startupOperation(start) : start(),
+  return withGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    async () => {
+      const sdkResourceHost = new LegacyPluginSdkResourceHost();
+      // Join startup through its returned promise without giving resident listeners the boot scope.
+      const start = (signal?: AbortSignal) =>
+        runOutsideAsyncWorkScope(() =>
+          startGatewayServerWithSdkHost(port, opts, sdkResourceHost, signal),
+        );
+      return await sdkResourceHost.run(() =>
+        opts.startupOperation ? opts.startupOperation(start) : start(),
+      );
+    },
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
 }
 

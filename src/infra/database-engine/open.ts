@@ -107,7 +107,7 @@ export function openEngineStore(ref: {
   }
   if (known?.engine === "sqlite") {
     throw new Error(
-      `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
+      `Existing SQLite ${schema.id} data cannot switch engines; use openclaw database port.`,
     );
   }
   ref.prepareAnchor();
@@ -118,7 +118,7 @@ export function openEngineStore(ref: {
           const inspection = ref.inspectSqlite();
           if (inspection.hasExistingData) {
             throw new Error(
-              `Existing SQLite ${schema.id} data cannot switch engines; wait for the database port tool.`,
+              `Existing SQLite ${schema.id} data cannot switch engines; use openclaw database port.`,
             );
           }
           if (!inspection.hasEngineAnchor && ref.existingOnly) {

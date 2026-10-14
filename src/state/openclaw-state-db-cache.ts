@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
@@ -312,7 +313,13 @@ function publishOpenClawStateDatabase(
   const { identity, admission } = asyncResources.publish(pathname);
   // Lifecycle settlement retains this projection after native disposal clears its identity.
   databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
-  cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
+  cachedDatabases.set(
+    pathname,
+    Object.assign(database, {
+      schemaFacts,
+      databaseEngineInput: getDatabaseEngineSelection()?.input,
+    }),
+  );
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));

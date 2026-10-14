@@ -18,6 +18,7 @@ import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { withGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -112,11 +113,17 @@ export async function createGatewayKernel(
   opts: GatewayServerOptions = {},
   options: GatewayKernelOptions = {},
 ) {
-  const scheduler = new GatewayScheduler();
-  const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
-  sdkResourceHost.bindScheduler(scheduler);
-  return await sdkResourceHost.run(() =>
-    createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
+  return withGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    async () => {
+      const scheduler = new GatewayScheduler();
+      const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
+      sdkResourceHost.bindScheduler(scheduler);
+      return await sdkResourceHost.run(() =>
+        createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
+      );
+    },
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
 }
 

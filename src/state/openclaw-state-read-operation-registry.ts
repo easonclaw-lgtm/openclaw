@@ -7,6 +7,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  stateBootstrap: () =>
+    import("./state-bootstrap-read.worker.js").then((m) => m.stateBootstrapReadOperations),
   machineState: () =>
     import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   projects: () =>

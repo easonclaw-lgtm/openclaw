@@ -7,6 +7,7 @@ import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { assertSameDatabaseEngineInput } from "./database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import type {
   PreparedSqliteWorkerOpen,
@@ -274,6 +275,10 @@ function assertSqliteWorkerActorStateContext(
   if (actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath) {
     throw new Error("Shared-state worker schema policy changed; close its actor first");
   }
+  assertSameDatabaseEngineInput(
+    actor.stateContext?.databaseEngineInput,
+    stateContext?.databaseEngineInput,
+  );
 }
 
 export function assertSqliteWorkerActorReusable(

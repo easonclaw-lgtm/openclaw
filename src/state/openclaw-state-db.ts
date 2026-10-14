@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import {
   assertStateDatabaseAccessAllowed,
@@ -220,13 +220,22 @@ export async function prepareOpenClawStateDatabaseSchema(
 
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
-  callback: (db: DatabaseSync) => T,
+  callback: (db: EngineConnection) => T,
   options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
 ): T {
-  if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
+  if (isStatePostgres()) {
+    return withEngineStoreAdmission(() => {
+      const database = openOpenClawStateDatabase(options);
+      try {
+        return runOpenClawStateWriteTransaction(({ db }) => callback(db), { ...options, database });
+      } finally {
+        if (options.sealOnClose) {
+          stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+        }
+      }
+    });
+  }
   const database = getOpenClawStateDatabaseIfOpen(options);
   if (database && isPostgresSqlConnection(database.db)) {
     requireNativeDatabaseFile("postgres", "repair");

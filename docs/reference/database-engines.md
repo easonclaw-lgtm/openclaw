@@ -50,15 +50,28 @@ that stores without a PostgreSQL schema remain on SQLite.
 | `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
 
-Workboard is currently the only PostgreSQL-supported store. Shared state,
-agent/session storage, and other stores continue using SQLite. Incognito storage
-remains memory-only. A supported store never silently falls back to SQLite when
-its PostgreSQL connection or admission fails.
+Shared state and workboard currently support PostgreSQL. The Gateway resolves
+the selected engine before its first shared-state read and retains that immutable
+selection for its reader, writer, and lease workers until shutdown. Restart after
+changing the connection or engine.
+
+This is an intermediate state behind the experimental gate: agent databases,
+including session transcripts and agent memory, still use SQLite, as do other
+stores without PostgreSQL support. Incognito storage remains memory-only.
+A supported store never silently falls back to SQLite when its PostgreSQL
+connection or admission fails.
 
 Use `openclaw database port` to move existing workboard data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no
 configuration or data migration.
+
+Existing SQLite shared state refuses a PostgreSQL selection and names
+`openclaw database port` as the migration path. The port command currently handles
+workboard only; shared-state porting is not available yet. Keep existing
+installations on SQLite until that support lands, or use a fresh state directory
+for experimental PostgreSQL shared state. Do not remove existing data to switch
+engines.
 
 ## Port existing workboard stores
 
@@ -74,9 +87,8 @@ openclaw database port --to postgres
 ```
 
 The command inventories all existing registered workboard stores, including
-disabled workboard plugin stores. It does not create missing stores. Shared state,
-agent databases, and safety journals remain on SQLite; shared-state and agent
-support await their respective PostgreSQL migrations. A dry run checks read-only
+disabled workboard plugin stores. It does not create missing stores or port
+shared state, agent databases, or safety journals. A dry run checks read-only
 prerequisites and reports checks that still require private migration, copying,
 or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
 namespace. Add `--json` for machine-readable results without connection strings

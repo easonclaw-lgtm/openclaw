@@ -56,6 +56,7 @@ import {
   resumeGatewayRestartTraceFromEnv,
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
+import { withGatewayDatabaseEngine } from "./server-database-engine.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
@@ -66,7 +67,18 @@ type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
 
-export async function prepareGatewayServerBootstrap(input: {
+export async function prepareGatewayServerBootstrap(
+  input: Parameters<typeof prepareGatewayServerBootstrapSelected>[0],
+) {
+  process.env.OPENCLAW_GATEWAY_PORT = String(input.port);
+  return withGatewayDatabaseEngine(
+    input.opts.startupConfigSnapshotRead?.snapshot,
+    () => prepareGatewayServerBootstrapSelected(input),
+    input.opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
+}
+
+async function prepareGatewayServerBootstrapSelected(input: {
   port: number;
   opts: GatewayServerOptions;
   log: GatewayLogger;

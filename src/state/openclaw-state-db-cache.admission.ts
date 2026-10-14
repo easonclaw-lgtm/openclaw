@@ -1,3 +1,7 @@
+import {
+  assertSameDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
@@ -63,6 +67,10 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       if (!database.db.isOpen) {
         return operation(database);
       }
+      assertSameDatabaseEngineInput(
+        database.databaseEngineInput,
+        getDatabaseEngineSelection()?.input,
+      );
       const db = database.db;
       if (isPostgresSqlConnection(db)) {
         assertSupportedStateSchemaVersion(db, database.path);
