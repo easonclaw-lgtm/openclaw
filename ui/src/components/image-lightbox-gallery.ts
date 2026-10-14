@@ -60,12 +60,7 @@ export class ImageLightboxGalleryController {
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (
-          preview &&
-          item &&
-          this.images.get(index) === pending &&
-          this.index === index
-        ) {
+        if (preview && item && this.images.get(index) === pending && this.index === index) {
           this.current = item;
           this.notify();
         }
