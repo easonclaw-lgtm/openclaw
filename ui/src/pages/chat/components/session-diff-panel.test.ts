@@ -446,3 +446,70 @@ describe("SessionDiffPanel", () => {
     expect(panel.querySelector(".session-diff__gap-controls")).toBeNull();
   });
 });
+
+describe("manual code folding", () => {
+  it("removes folded rows, retains layout state, and resets only when source changes", async () => {
+    localStorage.setItem(
+      "openclaw.control.sessionDiff.v1",
+      JSON.stringify({ split: true, wrap: false }),
+    );
+    const patch = `@@ -1,5 +1,5 @@
+ function greet() {
+   if (true) {
+-    return 2;
++    return 3;
+   }
+ }`;
+    const response = () => ({
+      ...fileResult(patch),
+      files: [{ ...fileResult(patch).files[0]!, path: "example.ts" }],
+    });
+    let current = response();
+    const panel = mountPanel();
+    panel.loader = async () => current;
+    const click = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!.click();
+    async function menu(trigger: string, action: string) {
+      click(trigger);
+      await waitForSolid(() => expect(panel.querySelector("wa-dropdown")).not.toBeNull());
+      panel
+        .querySelector("wa-dropdown")!
+        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: action } } }));
+      flush();
+    }
+    await waitForSolid(() =>
+      expect(panel.querySelectorAll(".session-diff__code-toggle")).toHaveLength(2),
+    );
+    expect(panel.textContent).toContain("return 3;");
+    expect(panel.querySelector(".chat-diff__change--add")?.textContent).toBe("3");
+    click('.session-diff__code-toggle[aria-label="Collapse code at line 2"]');
+    await waitForSolid(() => expect(panel.textContent).not.toContain("return 3;"));
+    expect(panel.querySelector(".session-diff__code-placeholder")?.textContent).toContain("+1");
+    await menu(".session-diff__toolbar-icon", "toggle-split");
+    await waitForSolid(() => expect(panel.querySelector(".chat-diff")).not.toBeNull());
+    expect(panel.textContent).not.toContain("return 2;");
+    click(".session-diff__refresh");
+    await settlePanel(panel);
+    expect(panel.textContent).not.toContain("return 3;");
+    await menu(".session-diff__file-menu", "expand-code");
+    await waitForSolid(() => expect(panel.textContent).toContain("return 3;"));
+    await menu(".session-diff__file-menu", "collapse-functions");
+    await waitForSolid(() => expect(panel.textContent).not.toContain("if (true)"));
+    click(".session-diff__code-placeholder");
+    await waitForSolid(() => expect(panel.textContent).toContain("return 3;"));
+    await menu(".session-diff__file-menu", "collapse-code");
+    current = {
+      ...response(),
+      files: [{ ...response().files[0]!, patch: patch.replace("return 3", "return 4") }],
+    };
+    click(".session-diff__refresh");
+    await waitForSolid(() => expect(panel.textContent).toContain("return 4;"));
+    expect(panel.querySelector(".session-diff__code-placeholder")).toBeNull();
+    await waitForSolid(() =>
+      expect(panel.querySelectorAll(".session-diff__code-toggle")).toHaveLength(2),
+    );
+    await menu(".session-diff__file-menu", "collapse-functions");
+    await waitForSolid(() => expect(panel.textContent).not.toContain("return 4;"));
+    await menu(".session-diff__file-menu", "expand-code");
+    await waitForSolid(() => expect(panel.textContent).toContain("return 4;"));
+  });
+});
