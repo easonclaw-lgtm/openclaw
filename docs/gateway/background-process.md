@@ -77,8 +77,8 @@ Behavior:
 
 ### Disable automatic completion turns
 
-Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` independently of scheduled
+Background exec completion notifications are enabled by default. They can run an
+ordinary follow-up turn in the originating session independently of scheduled
 automations. Disabling or deleting a periodic check, or disabling the scheduler,
 does not disable completion follow-ups.
 

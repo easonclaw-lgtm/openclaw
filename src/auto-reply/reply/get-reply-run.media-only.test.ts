@@ -1947,12 +1947,9 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
-  it.each([
-    ["event", "background-task", "background-task", "[OpenClaw session event]"],
-    ["event", "exec-event", "exec-event", "[OpenClaw exec completion]"],
-  ] as const)(
-    "retains %s routing and %s provenance without user-role context",
-    async (source, suppliedSourceTool, expectedSourceTool, transcriptPrompt) => {
+  it.each(["background-task", "exec-event"] as const)(
+    "retains event routing and %s provenance without user-role context",
+    async (sourceTool) => {
       const eventPrompt = "Inspect the completed operation and report useful results.";
       const syntheticConversationInfo =
         'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
@@ -1963,14 +1960,14 @@ describe("runPreparedReply media-only handling", () => {
         ...turn(
           eventPrompt,
           {
-            InternalTurnSource: source,
+            InternalTurnSource: "event",
             ChatType: "direct",
             OriginatingChannel: "discord",
             OriginatingTo: "discord:channel-123",
           },
           {},
           {
-            InputProvenance: { kind: "internal_system", sourceTool: suppliedSourceTool },
+            InputProvenance: { kind: "internal_system", sourceTool },
           },
         ),
       });
@@ -1987,14 +1984,11 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",
       });
-      const expectedTranscript =
-        expectedSourceTool === "exec-event"
-          ? `${transcriptPrompt}\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.`
-          : transcriptPrompt;
-      expect(call?.transcriptCommandBody).toBe(expectedTranscript);
-      expect(call?.followupRun.transcriptPrompt).toBe(expectedTranscript);
+      expect(call?.transcriptCommandBody).toBe(eventPrompt);
+      expect(call?.followupRun.transcriptPrompt).toBe(eventPrompt);
       expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-        provenance: { kind: "internal_system", sourceTool: expectedSourceTool },
+        content: eventPrompt,
+        provenance: { kind: "internal_system", sourceTool },
       });
     },
   );

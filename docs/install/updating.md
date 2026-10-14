@@ -1157,8 +1157,8 @@ openclaw health
 
 ### Background exec notifications after an update
 
-`[OpenClaw exec completion]` identifies an automatic follow-up for a background
-command. These ordinary session follow-ups remain available when a recurring
+Background-command completions can trigger automatic follow-up turns in their
+originating session. These follow-ups remain available when a recurring
 automation is disabled. To keep background exec without these extra model calls, set `tools.exec.notifyOnExit: false` and check per-agent
 overrides at `agents.entries.<id>.tools.exec.notifyOnExit`. Use `process poll` to
 collect results. See [Background exec notifications](/gateway/background-process#disable-automatic-completion-turns)
