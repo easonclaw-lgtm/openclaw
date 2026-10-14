@@ -149,7 +149,7 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
         truncated: false,
         completeActivePath: true,
       });
-      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), []);
+      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), [], undefined);
       expect(counter.counts.sizing).toBe(0);
 
       await persistSessionTranscriptTurn(scope, {
