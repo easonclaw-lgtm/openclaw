@@ -71,10 +71,11 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
           },
         ],
       };
+      const requestedReasoning = "low" as const;
       let sentEffort: unknown;
       const options = {
         apiKey: OPENAI_KEY,
-        reasoning: "low" as const,
+        reasoning: requestedReasoning,
         maxTokens: 256,
         toolChoice: "required" as const,
         onPayload(payload: unknown) {
@@ -88,7 +89,8 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
         : createOpenAICompletionsTransportStreamFn()(model, toolContext, options));
       const result = await stream.result();
       expect(result.errorMessage).toBeUndefined();
-      expect(sentEffort).toBe(transport === "direct" ? effort : "low");
+      // Managed Responses keeps the requested effort; direct Completions applies the model policy.
+      expect(sentEffort).toBe(transport === "direct" ? effort : requestedReasoning);
       expect(result.stopReason).toBe("toolUse");
       expect(result.content.filter((block) => block.type === "toolCall")).toMatchObject([
         { name: "probe", arguments: {} },

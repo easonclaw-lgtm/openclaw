@@ -273,8 +273,9 @@ describeLive("embedded Responses output-limit recovery live", () => {
             ]),
           }),
         ]);
-        // OpenAI can report a few tokens past max_output_tokens on a truncated response.
+        // OpenAI can report a few tokens past max_output_tokens on a truncated response (260 for 256).
         expect(failures[0]?.usage.output).toBeGreaterThanOrEqual(256);
+        expect(failures[0]?.usage.output).toBeLessThanOrEqual(256 + 32);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "exec",
