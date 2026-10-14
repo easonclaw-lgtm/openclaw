@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   ResponseOutputItem,
   ResponseOutputMessage,
-  ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../model-utils.js";
@@ -126,14 +125,10 @@ export function createResponsesTerminalController(params: {
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
-  const unsettledReasoning = new Set<number>();
+  const pendingReasoning = new Set<number>();
   const deferredToolCompletions: Extract<AssistantMessageEvent, { type: "toolcall_end" }>[] = [];
-  const recordReasoningReplayReadiness = (contentIndex: number, ready: boolean) => {
-    if (ready) {
-      unsettledReasoning.delete(contentIndex);
-    } else {
-      unsettledReasoning.add(contentIndex);
-    }
+  const recordPendingReasoning = (contentIndex: number) => {
+    pendingReasoning.add(contentIndex);
   };
   const releaseDeferredToolCompletions = () => {
     if (output.stopReason === "error" || output.stopReason === "aborted") {
@@ -144,7 +139,7 @@ export function createResponsesTerminalController(params: {
       stream.push(event);
     }
     deferredToolCompletions.length = 0;
-    unsettledReasoning.clear();
+    pendingReasoning.clear();
   };
   let rejectedToolCallId: string | undefined;
   const recordIncompleteToolCall = (
@@ -155,7 +150,7 @@ export function createResponsesTerminalController(params: {
     rejectedToolCallId =
       streamed?.block.id ?? (item.call_id ? resolveResponsesToolCallId(item) : undefined);
   };
-  const backfillReasoning = (items: ResponseOutputItem[]) => {
+  const settleReasoning = (items: ResponseOutputItem[]) => {
     for (const [outputIndex, item] of items.entries()) {
       if (item.type !== "reasoning") {
         continue;
@@ -165,22 +160,11 @@ export function createResponsesTerminalController(params: {
       if (block?.type !== "thinking") {
         continue;
       }
-      if (!block.thinkingSignature) {
-        block.thinkingSignature = JSON.stringify(
-          normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
-        );
-      }
-      if (!item.encrypted_content) {
-        continue;
-      }
-      const stored = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-      if (!stored.encrypted_content) {
-        block.thinkingSignature = JSON.stringify({
-          ...stored,
-          encrypted_content: item.encrypted_content,
-        });
-      }
-      if (options?.reasoningReplayMetadata) {
+      // Continuation retains this terminal item, whose ciphertext can differ from item.done.
+      block.thinkingSignature = JSON.stringify(
+        normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+      );
+      if (item.encrypted_content && options?.reasoningReplayMetadata) {
         Object.assign(block, {
           [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]: options.reasoningReplayMetadata,
         });
@@ -266,9 +250,9 @@ export function createResponsesTerminalController(params: {
       partial: output,
     };
     if (toolCall.async) {
-      for (const index of unsettledReasoning) {
+      for (const index of pendingReasoning) {
         if (index < contentIndex) {
-          // Persistence freezes async prefixes; publish readiness after their replay payload settles.
+          // Persistence freezes async prefixes; wait for the terminal reasoning snapshot.
           deferredToolCompletions.push(completion);
           return;
         }
@@ -388,7 +372,7 @@ export function createResponsesTerminalController(params: {
     terminalEventType: "response.completed" | "response.incomplete",
     rejectedToolCall: { error: unknown } | undefined,
   ) => {
-    backfillReasoning(response.output ?? []);
+    settleReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
@@ -472,7 +456,7 @@ export function createResponsesTerminalController(params: {
     recordIncompleteToolCall,
     recoverTerminalOutput,
     emitToolCallCompletion,
-    recordReasoningReplayReadiness,
+    recordPendingReasoning,
     releaseDeferredToolCompletions,
   };
 }

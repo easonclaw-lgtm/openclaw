@@ -267,7 +267,9 @@ inter-session user turns that only have provenance metadata.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
 - SDK Responses streams canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
-  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  the same terminal response item's signature bytes, even if `output_item.done`
+  carried different ciphertext. Async tool prefixes wait for terminal reasoning
+  settlement before persistence. Encrypted reasoning bytes, executable tool arguments,
   and previously approved history remain unchanged.
 - Successful SDK Responses completions omit absent error fields. The session
   owner attaches run metadata to fresh assistant history before persistence, so

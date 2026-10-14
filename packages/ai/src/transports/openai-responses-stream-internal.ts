@@ -108,7 +108,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
       };
-      terminal.recordReasoningReplayReadiness(slot.contentIndex, false);
+      terminal.recordPendingReasoning(slot.contentIndex);
     } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
       const block = collapseCandidate ? null : createTextBlock(item, "");
@@ -507,10 +507,6 @@ export async function processResponsesStream<TApi extends Api>(
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
           outputSlot.block.thinkingSignature = JSON.stringify(
             normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
-          );
-          terminal.recordReasoningReplayReadiness(
-            outputSlot.contentIndex,
-            Boolean(item.encrypted_content),
           );
           outputs.set(
             item,

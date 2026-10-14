@@ -11,21 +11,24 @@ import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-san
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
+import { processResponsesStream } from "./openai-responses-stream-internal.js";
 
-it("preserves provider reasoning containers from warm continuation through cold transcript replay", async () => {
-  const model: Model<"openai-responses"> = {
-    id: "gpt-5.4",
-    name: "Synthetic prefix replay",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    compat: { supportsResponsesContinuation: true },
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 1024,
-  };
+const model: Model<"openai-responses"> = {
+  id: "gpt-5.4",
+  name: "Synthetic prefix replay",
+  api: "openai-responses",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  compat: { supportsResponsesContinuation: true },
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 1024,
+};
+
+it("preserves terminal reasoning bytes from warm continuation through cold transcript replay", async () => {
   const sessionId = "reasoning-container-prefix";
   const context: Context = {
     systemPrompt: "Stable instructions.",
@@ -96,7 +99,12 @@ it("preserves provider reasoning containers from warm continuation through cold 
       const events = [
         ...output.flatMap((item, output_index) => [
           { type: "response.output_item.added", output_index, item },
-          { type: "response.output_item.done", output_index, item },
+          {
+            type: "response.output_item.done",
+            output_index,
+            item:
+              item.type === "reasoning" ? { ...item, encrypted_content: `streamed_${id}_` } : item,
+          },
         ]),
         {
           type: "response.completed",
@@ -179,3 +187,70 @@ it("preserves provider reasoning containers from warm continuation through cold 
     cleanupSessionResources(sessionId);
   }
 });
+
+it.each(["terminal-ciphertext", undefined, null])(
+  "settles async transcript prefixes with terminal ciphertext %s",
+  async (encryptedContent) => {
+    const output = createOpenAIResponsesAssistantOutput(model);
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_async",
+      summary: [],
+      content: [],
+      encrypted_content: "streamed-ciphertext",
+    };
+    const call = {
+      type: "function_call",
+      id: "fc_async",
+      call_id: "call_async",
+      name: "cache_probe",
+      arguments: "{}",
+      async: true,
+    };
+    let terminalSeen = false;
+    const snapshots: unknown[] = [];
+    await processResponsesStream(
+      (async function* () {
+        yield { type: "response.output_item.done", output_index: 0, item: reasoning };
+        yield { type: "response.output_item.done", output_index: 1, item: call };
+        terminalSeen = true;
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_async",
+            status: "completed",
+            output: [{ ...reasoning, encrypted_content: encryptedContent }, call],
+          },
+        };
+      })(),
+      output,
+      {
+        push(event) {
+          if (event.type === "toolcall_end") {
+            const snapshot = sanitizeTranscriptMessage(event.partial);
+            assert(snapshot.role === "assistant");
+            snapshots.push({ terminalSeen, reasoning: snapshot.content[0] });
+          }
+        },
+      },
+      model,
+      { asyncToolExecution: true },
+    );
+    expect(snapshots).toEqual([
+      {
+        terminalSeen: true,
+        reasoning: {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify({
+            id: "rs_async",
+            type: "reasoning",
+            summary: [],
+            content: [],
+            encrypted_content: encryptedContent,
+          }),
+        },
+      },
+    ]);
+  },
+);
