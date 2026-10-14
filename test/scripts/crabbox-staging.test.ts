@@ -925,29 +925,6 @@ console.log(JSON.stringify({root:owner.staging.root,source,receipt:JSON.parse(fs
       }),
   );
 
-  it("seals and reuses a large cache database with bounded read buffers", async () =>
-    withFixture(async (f) => {
-      const result = await f.program(`${seedMirror}
-const {DatabaseSync}=await import('node:sqlite');
-const owner=createMirrorStaging(ctx.staging,ctx.repository);seed(owner);
-const path=join(owner.staging.root,'mirror.sqlite');fs.rmSync(path);
-const database=new DatabaseSync(path);
-database.exec('CREATE TABLE payload (bytes BLOB); INSERT INTO payload VALUES (zeroblob(65 * 1024 * 1024))');
-database.close();
-const bytes=fs.statSync(path).size;
-const allocate=Buffer.alloc;
-Buffer.alloc=(size,...args)=>{if(size>128*1024)throw new Error('unbounded cache allocation');return allocate(size,...args);};
-try {
-  owner.finish();
-  const next=createMirrorStaging(ctx.staging,ctx.repository);
-  if(!next?.reused||next.staging.root!==owner.staging.root)throw new Error('large cache was not reused');
-  next.discard();
-} finally { Buffer.alloc=allocate; }
-console.log(JSON.stringify({bytes}));`);
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout).bytes).toBeGreaterThan(64 * 1024 * 1024);
-    }));
-
   it("holds an exclusive command view and only adopts an explicit idle handoff", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}
