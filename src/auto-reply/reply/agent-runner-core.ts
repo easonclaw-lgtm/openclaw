@@ -405,10 +405,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (
-    (visibleReplyDelivered || context.userTurnAccepted) &&
-    !replyOperation.abortSignal.aborted
-  ) {
+  if ((visibleReplyDelivered || context.userTurnAccepted) && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),

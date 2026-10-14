@@ -331,9 +331,9 @@ describe("resolveSessionDeliveryTarget", () => {
       }
       const cfg = { channels: { alpha: {}, beta: {} } } as OpenClawConfig;
 
-      expect(
-        await hasResolvableProactiveOwnerRoute({ cfg, policy: { accountId: "work" } }),
-      ).toBe(true);
+      expect(await hasResolvableProactiveOwnerRoute({ cfg, policy: { accountId: "work" } })).toBe(
+        true,
+      );
       expect(
         await resolveProactiveDeliveryTarget({ cfg, policy: { accountId: "work" } }),
       ).toMatchObject({
