@@ -142,6 +142,7 @@ vi.mock("./subagent-followup-hints.js", () => ({
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
 }));
 
+// mock-isolation: Keep Gateway transcript reads controlled; settlement cases opt into the real wait owner.
 vi.mock("./subagent-followup.runtime.js", () => {
   return {
     readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),

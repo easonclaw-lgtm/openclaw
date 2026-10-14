@@ -333,6 +333,7 @@ vi.mock("./run-embedded.runtime.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
+// mock-isolation: Supply fixed descendant snapshots without opening the process-wide registry database.
 vi.mock("./run-subagent-registry.runtime.js", () => ({
   readDescendantExecutionState: readDescendantExecutionStateMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,

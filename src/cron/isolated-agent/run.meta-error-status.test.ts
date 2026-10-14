@@ -17,6 +17,7 @@ import {
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
+// mock-isolation: Keep the database-backed descendant registry outside the fixed child-run fixture.
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
   hasUnsettledCronDescendants: async () => false,
 }));
