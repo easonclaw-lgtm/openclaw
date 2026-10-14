@@ -83,7 +83,6 @@ it.each([false, true])(
     try {
       const reply = handleReplyAgentRunError(failure, {
         resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
         replyExpectation: "required",
         userTurnAccepted: accepted,
         isRestartRecoveryArmed: async () => false,
