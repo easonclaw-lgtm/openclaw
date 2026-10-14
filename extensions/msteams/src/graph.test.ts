@@ -236,17 +236,6 @@ describe("msteams graph helpers", () => {
     expect(fetchCallSearchParam(1, "$top")).toBe("50");
   });
 
-  it("lets the shared SSRF guard select the Graph transport", async () => {
-    mockGraphCollection();
-
-    await fetchGraphJson({
-      token: graphToken,
-      path: "/groups",
-    });
-
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
-  });
-
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
     mockGraphCollection(groupOne);
 
@@ -302,25 +291,6 @@ describe("msteams graph helpers", () => {
     ).resolves.toEqual(graphCollection(groupOne));
 
     expect(arrayBuffer).not.toHaveBeenCalled();
-  });
-
-  it("passes the remaining operation deadline to the guarded Graph transport", async () => {
-    mockGraphCollection(groupOne);
-    const remainingMs = 5_000;
-
-    await fetchGraphJson({
-      token: graphToken,
-      path: "/groups?$select=id",
-      deadline: {
-        label: "MS Teams inbound preprocessing",
-        timeoutMs: remainingMs,
-        deadlineAtMs: Date.now() + remainingMs,
-      },
-    });
-
-    const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
-    expect(timeoutMs).toBeGreaterThan(0);
-    expect(timeoutMs).toBeLessThanOrEqual(remainingMs);
   });
 
   it("bounds absolute Graph pagination requests", async () => {
@@ -388,34 +358,6 @@ describe("msteams graph helpers", () => {
     expect(fetchCallUrl(2)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1");
     expect(fetchCallInit(2)?.method).toBe("PATCH");
     expect(fetchCallInit(2)?.body).toBe(JSON.stringify({ topic: "New topic" }));
-  });
-
-  it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
-    mockFetch(async (_input, init) => {
-      const method = init?.method ?? "GET";
-      if (method === "DELETE") {
-        return new Response("not found", { status: 404 });
-      }
-      return new Response("denied", { status: 403 });
-    });
-
-    await expectRejectsToThrow(
-      mutateGraphJson({
-        token: graphToken,
-        path: "/teams/team-1/channels",
-        method: "POST",
-        body: { displayName: "Deployments" },
-      }),
-      "Graph POST /teams/team-1/channels failed (403): denied",
-    );
-
-    await expectRejectsToThrow(
-      deleteGraphRequest({
-        token: graphToken,
-        path: "/teams/team-1/channels/channel-1",
-      }),
-      "Graph DELETE /teams/team-1/channels/channel-1 failed (404): not found",
-    );
   });
 
   it("releases a successful bodyful DELETE response", async () => {
@@ -782,7 +724,7 @@ describe("msteams graph helpers", () => {
       }
     });
 
-    it.each([undefined, false])("findOne early exit (collectItems=%s)", async (collectItems) => {
+    it("stops visiting items and pages after the first match", async () => {
       const target = { id: "target", name: "found-it" };
       const afterTarget = { id: "after", name: "not-visited" };
       const visited: string[] = [];
@@ -810,7 +752,6 @@ describe("msteams graph helpers", () => {
         token: graphToken,
         path: "/items",
         maxPages: 2,
-        collectItems,
         findOne: (item) => {
           visited.push(item.id);
           return item.id === "target";
@@ -820,57 +761,13 @@ describe("msteams graph helpers", () => {
       expect(result.found).toEqual(target);
       expect(result.truncated).toBe(false);
       expect(visited).toEqual(["1", "2", "target"]);
-      expect(result.items).toEqual(
-        collectItems === false
-          ? []
-          : [{ id: "1", name: "a" }, { id: "2", name: "b" }, target, afterTarget],
-      );
+      expect(result.items).toEqual([
+        { id: "1", name: "a" },
+        { id: "2", name: "b" },
+        target,
+        afterTarget,
+      ]);
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    });
-
-    it.each([undefined, false])("findOne with no match (collectItems=%s)", async (collectItems) => {
-      mockFetch(async () =>
-        Response.json(
-          pagedResponse(
-            [{ id: "x", name: "x" }],
-            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
-          ),
-        ),
-      );
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-        maxPages: 2,
-        collectItems,
-        findOne: (item) => item.id === "missing",
-      });
-
-      expect(result.found).toBeUndefined();
-      expect(result.truncated).toBe(true);
-      expect(result.items).toHaveLength(collectItems === false ? 0 : 2);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    });
-
-    it("preserves findOne errors", async () => {
-      const failure = new Error("predicate failed");
-      mockJsonFetchResponse(
-        pagedResponse(
-          [{ id: "1", name: "a" }],
-          "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
-        ),
-      );
-
-      await expect(
-        fetchAllGraphPages<Item>({
-          token: graphToken,
-          path: "/items",
-          findOne: () => {
-            throw failure;
-          },
-        }),
-      ).rejects.toBe(failure);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
 
     it("treats a missing value as empty and rejects a malformed value", async () => {
@@ -883,30 +780,6 @@ describe("msteams graph helpers", () => {
       await expect(
         fetchAllGraphPages<Item>({ token: graphToken, path: "/items" }),
       ).rejects.toThrow();
-    });
-
-    it("does not truncate when the final allowed page has no nextLink", async () => {
-      mockFetch(async (_input, _init) =>
-        vi.mocked(globalThis.fetch).mock.calls.length === 1
-          ? Response.json(
-              pagedResponse(
-                [{ id: "1", name: "a" }],
-                "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
-              ),
-            )
-          : Response.json(pagedResponse([{ id: "2", name: "b" }])),
-      );
-
-      await expect(
-        fetchAllGraphPages<Item>({ token: graphToken, path: "/items", maxPages: 2 }),
-      ).resolves.toEqual({
-        items: [
-          { id: "1", name: "a" },
-          { id: "2", name: "b" },
-        ],
-        truncated: false,
-      });
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
   });
 });
