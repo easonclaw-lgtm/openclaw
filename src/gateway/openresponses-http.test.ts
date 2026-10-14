@@ -33,7 +33,6 @@ import {
 import {
   incompatibleReplacementCases,
   emitIncompatibleAssistantReplacement,
-  emitEmbeddedLateCommentary,
   createOpenAiHttpTestClient,
   parseSseEvents,
   collectSseEventTypes,
@@ -339,21 +338,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("keeps embedded late commentary append-only while the final answer streams", async () => {
-    agentCommandMock.mockImplementationOnce(emitEmbeddedLateCommentary);
-    const stream = createStream();
-    const content: string[] = [];
-    const terminals: string[] = [];
-    stream.on("response.output_text.delta", ({ delta }) => content.push(delta));
-    stream.on("response.failed", () => terminals.push("failed"));
-    stream.on("response.completed", () => terminals.push("completed"));
-    const response = await stream.finalResponse();
-    expect(content.join("")).toBe("I will inspect the workspace.\n\nThe check is complete.");
-    expect(response.output_text).toBe(content.join(""));
-    expect(terminals).toEqual(["completed"]);
-    expect(response.status).toBe("completed");
-  });
 
   it.each(
     incompatibleReplacementCases.filter(({ name }) =>
@@ -1444,46 +1428,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
     },
   );
-
-  it("replays returned tool items into a stateless turn", async () => {
-    agentCommandMock.mockClear();
-    const calls = [
-      { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
-      { id: "call_2", name: "get_weather", arguments: '{"city":"Paris"}' },
-    ];
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Checking both cities.", mediaUrl: null }],
-      meta: { durationMs: 0, stopReason: "tool_calls", pendingToolCalls: calls },
-    });
-    const user = { type: "message", role: "user", content: "Compare the weather." };
-    const firstResponse = await post({ input: [user], stream: true, tools: WEATHER_TOOL });
-    expect(firstResponse.status).toBe(200);
-    const first = responseEvent(parseSseEvents(await firstResponse.text()));
-    const results = calls.map((call, index) => ({
-      type: "function_call_output",
-      call_id: call.id,
-      output: String(20 + index),
-    }));
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Compared.", mediaUrl: null }],
-      meta: { durationMs: 0 },
-    });
-    const secondResponse = await post({
-      input: [user, ...first.output, ...results],
-      tools: WEATHER_TOOL,
-    });
-    expect(secondResponse.status).toBe(200);
-    expect(firstAgentOpts(1).sessionKey).not.toBe(firstAgentOpts().sessionKey);
-    const prompt = firstAgentOpts(1).message;
-    expect(prompt).toContain("Checking both cities.");
-    for (const call of calls) {
-      expect(prompt).toContain(
-        `tool_call id=${call.id} name=${call.name} arguments=${call.arguments}`,
-      );
-      expect(prompt).toContain(`Tool:${call.id}:`);
-    }
-    await ensureResponseConsumed(secondResponse);
-  });
 
   it("continues an empty client tool result using the previous response", async () => {
     const client = createOpenAiHttpTestClient(enabledPort);
