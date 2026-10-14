@@ -131,10 +131,6 @@ export function createResponsesTerminalController(params: {
     pendingReasoning.add(contentIndex);
   };
   const releaseDeferredToolCompletions = () => {
-    if (output.stopReason === "error" || output.stopReason === "aborted") {
-      return;
-    }
-    // Terminal settlement closes metadata updates even when optional ciphertext is absent.
     for (const event of deferredToolCompletions) {
       stream.push(event);
     }
@@ -438,15 +434,6 @@ export function createResponsesTerminalController(params: {
         : undefined);
     if (failure) {
       const error = output.errorMessage ? new Error(output.errorMessage) : failure.error;
-      if (
-        terminalEventType === "response.incomplete" &&
-        output.stopReason === "length" &&
-        incompleteReason === "max_output_tokens" &&
-        error instanceof IncompleteToolCallError
-      ) {
-        // Earlier validated calls still settle when a later call reaches the output ceiling.
-        releaseDeferredToolCompletions();
-      }
       throw error;
     }
   };

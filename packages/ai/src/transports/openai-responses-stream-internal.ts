@@ -668,7 +668,6 @@ export async function processResponsesStream<TApi extends Api>(
           const completeToolCall =
             event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
           terminal.recoverTerminalOutput(items, completeToolCall);
-          terminal.releaseDeferredToolCompletions();
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
         if (
@@ -715,5 +714,7 @@ export async function processResponsesStream<TApi extends Api>(
         delete block.partialJson;
       }
     }
+    // Completed calls survive interrupted streams, using item.done reasoning if no terminal arrived.
+    terminal.releaseDeferredToolCompletions();
   }
 }

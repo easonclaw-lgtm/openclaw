@@ -254,3 +254,98 @@ it.each(["terminal-ciphertext", undefined, null])(
     ]);
   },
 );
+
+it.each(["stream error", "error event", "abort", "missing terminal"])(
+  "delivers completed async calls with item-done reasoning after %s",
+  async (ending) => {
+    const output = createOpenAIResponsesAssistantOutput(model);
+    const controller = new AbortController();
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_interrupted",
+      summary: [],
+      content: [],
+      encrypted_content: "item-done-ciphertext",
+    };
+    const snapshots: unknown[] = [];
+    const result = processResponsesStream(
+      (async function* () {
+        yield { type: "response.output_item.done", output_index: 0, item: reasoning };
+        for (let index = 1; index <= 2; index++) {
+          yield {
+            type: "response.output_item.done",
+            output_index: index,
+            item: {
+              type: "function_call",
+              id: `fc_${index}`,
+              call_id: `call_${index}`,
+              name: "cache_probe",
+              arguments: JSON.stringify({ index }),
+              status: "completed",
+              async: true,
+            },
+          };
+        }
+        if (ending === "stream error") {
+          throw new Error("Synthetic disconnect");
+        }
+        if (ending === "error event") {
+          yield { type: "error", message: "Synthetic provider error" };
+        }
+        if (ending === "abort") {
+          controller.abort();
+        }
+      })(),
+      output,
+      {
+        push(event) {
+          if (event.type === "toolcall_end") {
+            snapshots.push({
+              toolCall: structuredClone(event.toolCall),
+              transcript: sanitizeTranscriptMessage(event.partial),
+            });
+          }
+        },
+      },
+      model,
+      { asyncToolExecution: true, signal: controller.signal },
+    );
+    await expect(result).rejects.toThrow(
+      ending === "stream error"
+        ? "Synthetic disconnect"
+        : ending === "error event"
+          ? "Synthetic provider error"
+          : ending === "abort"
+            ? /abort/i
+            : "OpenAI Responses stream ended before a terminal response event",
+    );
+    expect(snapshots).toEqual(
+      [1, 2].map((index) => ({
+        toolCall: {
+          type: "toolCall",
+          id: `call_${index}|fc_${index}`,
+          name: "cache_probe",
+          arguments: { index },
+          async: true,
+        },
+        transcript: expect.objectContaining({
+          content: [
+            {
+              type: "thinking",
+              thinking: "",
+              thinkingSignature: JSON.stringify({
+                id: "rs_interrupted",
+                type: "reasoning",
+                summary: [],
+                content: [],
+                encrypted_content: "item-done-ciphertext",
+              }),
+            },
+            expect.objectContaining({ id: "call_1|fc_1" }),
+            expect.objectContaining({ id: "call_2|fc_2" }),
+          ],
+        }),
+      })),
+    );
+  },
+);
