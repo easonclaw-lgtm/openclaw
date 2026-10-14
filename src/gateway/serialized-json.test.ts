@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   registerSerializedJsonArray,
   SerializedJsonArray,
+  SerializedJsonPayload,
   serializeGatewayFrame,
 } from "./serialized-json.js";
 
@@ -70,6 +71,29 @@ describe("serialized Gateway response arrays", () => {
       expect(toJSON).toHaveBeenCalledOnce();
     },
   );
+
+  it("composes shared list strings with worker bytes and shared payload fanout", () => {
+    const rows = [{ key: "agent:main:one", label: "é🦞" }];
+    const sessions = registerSerializedJsonArray(
+      rows,
+      rows.map((row) => JSON.stringify(row)),
+    );
+    const messages = [{ content: "worker é🦞" }];
+    const payload = {
+      sessions,
+      messages: new SerializedJsonArray(Buffer.from(JSON.stringify(messages))),
+    };
+    const expected = JSON.stringify({ type: "res", id: "mixed", payload: { sessions, messages } });
+    expect(serializeGatewayFrame({ type: "res", id: "mixed", payload }).toString()).toBe(expected);
+    expect(
+      serializeGatewayFrame({
+        type: "res",
+        id: "mixed",
+        payload: new SerializedJsonPayload(payload),
+      }).toString(),
+    ).toBe(expected);
+    expect(new SerializedJsonPayload({ sessions }).toJSON()).toEqual({ sessions: rows });
+  });
 
   it("preserves ordinary responses and JSON callers", () => {
     const messages = [{ text: "ready" }];

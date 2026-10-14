@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
-const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
+const serializedArrays = new WeakMap<readonly unknown[], string>();
 
 /** Own the optional payload field, including JSON omission, before socket fanout. */
 export class SerializedJsonPayload {
@@ -29,11 +29,11 @@ export function registerSerializedJsonArray<T>(
   values: readonly T[],
   encodedRows: readonly string[],
 ): readonly T[] {
-  serializedArrays.set(values, Buffer.from(`[${encodedRows.join(",")}]`));
+  serializedArrays.set(values, `[${encodedRows.join(",")}]`);
   return values;
 }
 
-function arrayBytes(value: unknown): Uint8Array | undefined {
+function arrayJson(value: unknown): string | Uint8Array | undefined {
   return value instanceof SerializedJsonArray
     ? value.bytes
     : Array.isArray(value)
@@ -89,7 +89,7 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
       record &&
       typeof record.toJSON !== "function" &&
       Object.keys(record).some((key) =>
-        arrayBytes(Object.getOwnPropertyDescriptor(record, key)?.value),
+        arrayJson(Object.getOwnPropertyDescriptor(record, key)?.value),
       ),
   );
   if (
@@ -101,29 +101,33 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
   ) {
     return JSON.stringify(value);
   }
-  const chunks: Uint8Array[] = [];
+  const chunks: (string | Uint8Array)[] = [];
+  let hasBytes = false;
   const appendObject = (record: Record<string, unknown>): void => {
-    chunks.push(Buffer.from("{"));
+    chunks.push("{");
     let separator = "";
     for (const key of Object.keys(record)) {
       const field = record[key];
-      const rawArray = record === arrayOwner ? arrayBytes(field) : undefined;
+      const rawArray = record === arrayOwner ? arrayJson(field) : undefined;
       const nestedPayload =
         field === payload ? payload : field === arrayOwner ? arrayOwner : undefined;
       const encoded = rawArray || nestedPayload ? `${JSON.stringify(key)}:` : fieldJson(key, field);
       if (!encoded) {
         continue;
       }
-      chunks.push(Buffer.from(`${separator}${encoded}`));
+      chunks.push(`${separator}${encoded}`);
       separator = ",";
       if (rawArray) {
         chunks.push(rawArray);
+        hasBytes ||= typeof rawArray !== "string";
       } else if (nestedPayload) {
         appendObject(nestedPayload);
       }
     }
-    chunks.push(Buffer.from("}"));
+    chunks.push("}");
   };
   appendObject(frame);
-  return Buffer.concat(chunks);
+  return hasBytes
+    ? Buffer.concat(chunks.map((chunk) => (typeof chunk === "string" ? Buffer.from(chunk) : chunk)))
+    : chunks.join("");
 }
