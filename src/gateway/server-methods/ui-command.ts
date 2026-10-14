@@ -206,10 +206,10 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
         resolveGatewayPersonalToolParticipant(
           options.client?.internal?.agentRuntimeIdentity,
         )?.assertCurrent();
+        // Portal feedback is additive; unrelated UI commands retain their response contract.
         const reply: UiCommandResult = {
           ok: true,
-          delivery: "dispatched",
-          ...(presentation ? { presentation } : {}),
+          ...(presentation ? { delivery: "dispatched", presentation } : {}),
         };
         options.respond(true, reply);
       } else {

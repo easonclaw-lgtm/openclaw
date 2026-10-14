@@ -98,7 +98,7 @@ describe("ui.command gateway method", () => {
       },
       new Set(["alice-tab-one"]),
     );
-    expect(result.respond).toHaveBeenCalledWith(true, { ok: true, delivery: "dispatched" });
+    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
   it("delivers plugin panel commands only to the requester", async () => {
@@ -114,7 +114,7 @@ describe("ui.command gateway method", () => {
       },
     };
     const result = await call(params, [requester, client("bystander")], requester);
-    expect(result.respond).toHaveBeenCalledWith(true, { ok: true, delivery: "dispatched" });
+    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
     expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
       "ui.command",
       { ...params, agentId: "main" },
@@ -135,7 +135,7 @@ describe("ui.command gateway method", () => {
         callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
           await Promise.resolve();
           const result = await call(params, recipients);
-          expect(result.respond).toHaveBeenCalledWith(true, { ok: true, delivery: "dispatched" });
+          expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
           const delivery = expectDefined(result.broadcastToConnIds.mock.calls[0], "UI delivery");
           deliveries.push(delivery[2]);
           return { ok: true } as T;
@@ -186,7 +186,7 @@ describe("ui.command gateway method", () => {
         return expectDefined(results.at(-1), "screen handler result");
       };
       const expectTarget = (result: Awaited<ReturnType<typeof call>>, connId: string) => {
-        expect(result.respond).toHaveBeenCalledWith(true, { ok: true, delivery: "dispatched" });
+        expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
         expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
           "ui.command",
           { command: { kind: "sidebar", visible: false } },
