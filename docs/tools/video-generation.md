@@ -112,7 +112,7 @@ of failing the task if local persistence rejects an oversized file.
 | PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
+| Together              | `Wan-AI/wan2.7-t2v`             |  ✓   | `Wan-AI/wan2.7-i2v` only                             | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
 | Z.AI                  | `cogvideox-3`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
@@ -443,7 +443,9 @@ OpenClaw does not append auto-detected providers.
     ratios.
   </Accordion>
   <Accordion title="Together">
-    Single image reference only.
+    Single first-frame image only with `Wan-AI/wan2.7-i2v`. Wan 2.7 requests
+    use 2-10 seconds in OpenClaw. See [Together AI](/providers/together) for
+    supported sizes and request parameters.
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping
