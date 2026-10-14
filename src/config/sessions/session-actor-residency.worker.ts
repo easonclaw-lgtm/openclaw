@@ -41,6 +41,7 @@ export function createSessionActorResidency() {
     drop,
     remember(state: SessionActorStoredState) {
       const key = state.hot.target.sessionKey;
+      const oversized = oversizedKey === key;
       drop(key);
       // Receipts own appended bodies; residency keeps navigation and byte accounting.
       state.transcript.contextMetadata = state.hot.transcript.projection?.contextMetadata;
@@ -54,7 +55,12 @@ export function createSessionActorResidency() {
           }
         }
       }
-      const bytes = residents.size === 0 ? undefined : measure(key, state);
+      // Keep the allowance until eviction/invalidation, even if an own write shrinks it.
+      // Measuring an already exempt working set only allocates another full serialization.
+      const bytes = oversized ? 0 : residents.size === 0 ? undefined : measure(key, state);
+      if (oversized) {
+        oversizedKey = key;
+      }
       residents.set(key, { state, bytes });
       residentBytes += bytes ?? 0;
       // Both ordinary and oversized actors age out through the same count-bound LRU.

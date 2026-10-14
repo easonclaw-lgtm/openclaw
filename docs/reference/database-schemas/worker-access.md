@@ -1897,7 +1897,9 @@ Worker residency retains at most 128 sessions, with an 8 MiB serialized byte
 budget for ordinary actors and one additional oversized working set. Small
 competitors do not evict that oversized actor; another oversized actor replaces
 it, and the shared least-recently-used count limit still applies. This avoids
-repeated full hydration during interleaved appends and metadata patches. Cold
+repeated full hydration during interleaved appends and metadata patches. The
+oversized allowance lasts until eviction or invalidation, so commits do not
+serialize that already exempt working set again merely to count its bytes. Cold
 first access and invalidated actors still hydrate under the writer reservation.
 Incognito keeps its memory-only storage and original nonrenewing 24-hour expiry.
 It has no database worker; session close, owner close, or process exit discards
