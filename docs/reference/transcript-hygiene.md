@@ -261,6 +261,9 @@ inter-session user turns that only have provenance metadata.
 - SDK Responses replay uses the storage privacy shape and a fixed field order:
   summaries are empty, cleartext reasoning content is omitted, and completed
   ciphertext remains unchanged across live continuation and transcript reload.
+  A provider's empty `content: []` reasoning container is preserved across
+  transcript reload so reopening a session does not change its cached prefix;
+  an absent container stays absent.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
 - SDK Responses streams canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
