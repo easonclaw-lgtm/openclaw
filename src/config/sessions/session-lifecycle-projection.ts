@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -11,7 +10,6 @@ import { buildProjectedLifecycleUpserts } from "./session-accessor.sqlite-lifecy
 import type {
   LifecycleRemovalProjectionInput,
   ReclamationDatabaseOptions,
-  SessionMaintenanceMetadataResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
@@ -109,8 +107,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
 }) {
   return runSessionEntryWorkerOperation<
     SessionLifecycleProjectionCommitted,
-    | SessionLifecycleProjectionCommitted["result"]
-    | Extract<SessionMaintenanceMetadataResult, { kind: "maintenance-preservation-required" }>
+    SessionLifecycleProjectionCommitted["result"]
   >({
     database: params.database,
     agentId: params.input.agentId,
@@ -119,10 +116,6 @@ export function commitSessionLifecycleProjectionInWorker(params: {
     assertCandidate: params.assertCandidate,
     retainedExecution: params.execution,
     candidateKind: "session-lifecycle-projection",
-    readRolledBackResult: (value) =>
-      isRecord(value) && value.kind === "maintenance-preservation-required"
-        ? { value: { kind: "maintenance-preservation-required" } }
-        : undefined,
     run: (worker, commit) =>
       commit(() => worker.execute({ type: "session.lifecycle.project", input: params.input })),
     onAcknowledged(candidate) {

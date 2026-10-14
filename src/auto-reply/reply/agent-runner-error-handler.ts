@@ -168,7 +168,11 @@ export async function handleAgentExecutionError(params: {
       )
     ) {
       runState.replyCompletion = resolveReplyCompletion(
-        resolveReplyExpectation(turn.followupRun.run),
+        resolveReplyExpectation({
+          terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,
+          inputProvenance: turn.followupRun.run.inputProvenance,
+          scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+        }),
         "pending",
       );
       takePendingLifecycleTerminal().emit("end", undefined, { yielded: true });
