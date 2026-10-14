@@ -191,7 +191,12 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
-          if (!gatewayInstanceRuntime.isAvailable()) {
+          // Host control creates new effects; retained reply principals can remain
+          // current during recovery marking without admitting host start/stop.
+          if (
+            runtime.requestEntryLifetime.signal.aborted ||
+            !gatewayInstanceRuntime.isAvailable()
+          ) {
             throw new Error(
               "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
             );
