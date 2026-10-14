@@ -4,9 +4,9 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type {
-  UiCommandParams,
-  UiPortalPresentation,
+import {
+  type UiPortalPresentation,
+  validateUiCommandParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayToolCallerWrapper,
@@ -18,6 +18,7 @@ import {
   callPersonalToolUiCommand as call,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import type { GatewayClient } from "./types.js";
 import { uiCommandHandlers } from "./ui-command.js";
@@ -401,7 +402,7 @@ describe("portal presentation feedback", () => {
     const connection = new AbortController();
     requester.connectionSignal = connection.signal;
     const respond = vi.fn();
-    const dispatch = vi.fn<(event: string, params: UiCommandParams) => void>();
+    const dispatch = vi.fn<GatewayBroadcastToConnIdsFn>();
     const context = {
       ...createContext(),
       getClientConnIds: (filter?: (entry: GatewayClient) => boolean) =>
@@ -427,7 +428,11 @@ describe("portal presentation feedback", () => {
         command: { kind: "panel", panel: "portal", portalId: "app", open: true },
       });
     const report = (presentation: UiPortalPresentation, source = requester) => {
-      const requestId = dispatch.mock.calls[0]?.[1].requestId;
+      const payload = dispatch.mock.calls[0]?.[1];
+      if (!validateUiCommandParams(payload)) {
+        throw new Error("Expected a valid UI command broadcast");
+      }
+      const requestId = expectDefined(payload.requestId, "portal presentation request");
       const reply = vi.fn();
       return Promise.resolve(
         invoke("ui.command.result", { requestId, presentation }, source, reply),
