@@ -12,6 +12,7 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -71,6 +72,34 @@ async function invokePreferenceMethod(
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+});
+
+test("users.prefs returns updated preferences when a write commits before read delivery", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "prefs-publication-",
+  });
+  try {
+    const profileId = ensureProfileForEmail("reader@example.test").id;
+    await preferences.setCanonicalUserPreferences(profileId, { "ui.accent": "#112233" });
+    const executeRead = stateRead.executeExistingOpenClawStateRead;
+    using read = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    read.mockImplementationOnce(async (readOptions, command, scope) => {
+      const reply = await executeRead(readOptions, command, scope);
+      await preferences.setCanonicalUserPreferences(profileId, { "ui.accent": "#aabbcc" });
+      return reply;
+    });
+
+    expect(
+      await invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, profileId),
+    ).toEqual({
+      ok: true,
+      payload: { status: "ok", entries: { "ui.accent": "#aabbcc" } },
+      error: undefined,
+    });
+  } finally {
+    await state.cleanup();
+  }
 });
 
 test("users.prefs reads merged-profile accents while an unrelated writer reply is pending", async ({
