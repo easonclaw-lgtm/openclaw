@@ -5,10 +5,7 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "./openclaw-state-worker-store.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import {
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
@@ -42,15 +39,20 @@ export async function getUserPreferenceValues(
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
-export function getCanonicalUserPreferences(
+export async function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "userPreferences.read",
-    input: { profileId, keys },
-  });
+  const context = captureOpenClawStateWorkerContext(options);
+  await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.read", profileId, keys },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return reply?.preferences;
 }
 
 export async function setCanonicalUserPreferences(
