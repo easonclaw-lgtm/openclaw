@@ -1,7 +1,9 @@
 import { Session } from "node:inspector/promises";
+import { mock } from "node:test";
 import { type MessagePort, workerData } from "node:worker_threads";
 
 const { receipt } = workerData as { receipt: MessagePort };
+mock.timers.enable({ apis: ["setTimeout"] });
 let collections = 0;
 // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the inspector session receiver.
 const post = Session.prototype.post;
@@ -14,7 +16,8 @@ Object.defineProperty(Session.prototype, "post", {
   },
 });
 receipt.once("message", () => {
-  // The parent observed task settlement; this timer follows the worker's idle-GC timer.
-  setTimeout(() => receipt.postMessage(collections, []), 1500);
+  // The parent observed task settlement; advance the worker's idle-GC timer without sleeping.
+  mock.timers.tick(1500);
+  receipt.postMessage(collections, []);
 });
 await import("./code-mode-node.worker.js");
