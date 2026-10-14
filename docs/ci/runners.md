@@ -290,7 +290,12 @@ browser suite. Capacity changes require complete-job qualification against the
 current preparation and inventory; the hosted routes and all test deadlines stay unchanged.
 
 The real-Gateway job has a 40-minute budget when its existing routing selects
-`ubuntu-24.04`, and 20 minutes on Blacksmith. In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
+`ubuntu-24.04`, and 25 minutes on Blacksmith. In [run 38546577399](https://github.com/openclaw/openclaw/actions/runs/38546577399/job/115794832823),
+the native second shard spent 3m13s preparing, including a 2m04s build, then
+16m48.92s in Vitest. All 21 files and 48 tests passed, but those phases alone
+exceeded the former 20-minute budget without counting wrapper startup or cleanup. The
+extra five minutes leave completion headroom for cleanup and artifact uploads.
+In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
 7m42s elapsed before the browser suite began; the 20-minute job limit then
 canceled a progressing suite before its widget cases. The hosted budget covers
 the complete setup, private artifact build, and test workload. Individual test
