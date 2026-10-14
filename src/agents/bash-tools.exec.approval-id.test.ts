@@ -126,6 +126,7 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
+// mock-isolation: Keep the shared supervisor isolated while routing fixtures capture local spawns.
 vi.mock("../process/supervisor/index.js", async () => {
   const { createProcessSupervisor } = await import("../process/supervisor/supervisor.js");
   const nativeSupervisor = createProcessSupervisor();
