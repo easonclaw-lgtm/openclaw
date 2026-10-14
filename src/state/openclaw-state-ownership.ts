@@ -45,6 +45,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { inspectOpenClawStateOwnershipWithWorker } from "./openclaw-state-ownership-worker.js";
@@ -279,7 +280,6 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
   }
   const env = options.env ?? process.env;
   if (getDatabaseEngineSelection()?.input) {
-    const { executeExistingOpenClawStateRead } = await import("./openclaw-state-db-readonly.js");
     const read = await executeExistingOpenClawStateRead(
       { path: databasePath, env },
       { type: "stateBootstrap.ownership", input: { pathname: databasePath } },
