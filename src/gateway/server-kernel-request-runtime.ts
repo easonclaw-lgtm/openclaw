@@ -35,7 +35,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
-    lifecycle,
     startupState,
     shutdownRuntime,
   } = runtime;
@@ -166,7 +165,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
-    isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
+    // Request entry fences new calls during the prelude. Retained principals
+    // stay current until run shutdown records recovery and cancels execution.
+    isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
     prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
