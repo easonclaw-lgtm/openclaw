@@ -1,4 +1,5 @@
-import { setTimeout as delay } from "node:timers/promises";
+import { once } from "node:events";
+import { MessageChannel } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -19,11 +20,17 @@ const config = {
 };
 
 it("does not force full collections in a reusable Code Mode worker", async () => {
+  const { port1, port2 } = new MessageChannel();
+  const observed = once(port1, "message");
   const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
     workerUrl: new URL("./code-mode-node-idle-gc.test-support.ts", import.meta.url),
     maxWorkers: 1,
     idleTimeoutMs: 0,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 60, maxYoungGenerationSizeMb: 4 } },
+    workerOptions: {
+      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 4 },
+      workerData: { receipt: port2 },
+      transferList: [port2],
+    },
   });
   const run = (source: string) =>
     pool.run(
@@ -38,16 +45,38 @@ it("does not force full collections in a reusable Code Mode worker", async () =>
       { timeoutMs: 5000 },
     );
   try {
-    expect(
-      await run("const data = new Array(3 * 1024 * 1024).fill(1); return data.length;"),
-    ).toMatchObject({ status: "completed" });
+    const initial = await run(
+      "const data = new Array(5 * 1024 * 1024).fill(1); await yield_control(); return data.length;",
+    );
+    if (initial.status !== "waiting") {
+      throw new Error(JSON.stringify(initial));
+    }
     // Observe the native idle path; natural V8 collections are allowed and are not counted.
-    await delay(1500);
-    expect(await run("return idleCollectionRequests();")).toMatchObject({
+    port1.postMessage(null);
+    expect(await observed).toEqual([0]);
+    expect(
+      await pool.run(
+        {
+          kind: "resume",
+          config,
+          progress: new CodeModeNodeProgress(config.maxOutputBytes).buffer,
+          inlineHost: false,
+          settledRequests: initial.pendingRequests.map(({ id }) => ({
+            id,
+            ok: true,
+            json: "null",
+          })),
+        },
+        { timeoutMs: config.timeoutMs },
+      ),
+    ).toMatchObject({ status: "completed", value: { json: "5242880" } });
+    expect(await run("return 42;")).toMatchObject({
       status: "completed",
-      value: { json: "0" },
+      value: { json: "42" },
     });
   } finally {
+    port1.close();
+    port2.close();
     await pool.close();
   }
 });

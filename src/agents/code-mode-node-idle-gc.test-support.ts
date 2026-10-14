@@ -1,7 +1,7 @@
 import { Session } from "node:inspector/promises";
-import { syncBuiltinESMExports } from "node:module";
-import vm from "node:vm";
+import { type MessagePort, workerData } from "node:worker_threads";
 
+const { receipt } = workerData as { receipt: MessagePort };
 let collections = 0;
 // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the inspector session receiver.
 const post = Session.prototype.post;
@@ -13,11 +13,8 @@ Object.defineProperty(Session.prototype, "post", {
     return Reflect.apply(post, this, [method, ...params]);
   },
 });
-vm.Script = class extends vm.Script {
-  override runInContext(...args: Parameters<vm.Script["runInContext"]>) {
-    args[0].idleCollectionRequests = () => collections;
-    return super.runInContext(...args);
-  }
-};
-syncBuiltinESMExports();
+receipt.once("message", () => {
+  // The parent observed task settlement; this timer follows the worker's idle-GC timer.
+  setTimeout(() => receipt.postMessage(collections, []), 1500);
+});
 await import("./code-mode-node.worker.js");
