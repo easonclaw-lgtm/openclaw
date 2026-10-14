@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
@@ -62,6 +62,37 @@ function mockVideoDownload(
 }
 
 describe("together video generation provider", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("expires after 20 minutes of polling when no timeout is supplied", async () => {
+    vi.useFakeTimers();
+    const release = mockSubmission({ id: "video_pending", status: "in_progress" });
+    fetchWithTimeoutMock.mockImplementation(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      return Response.json({ id: "video_pending", status: "in_progress" });
+    });
+    let error: unknown;
+    void generateVideo().catch((caught: unknown) => {
+      error = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(1_199_999);
+    expect(error).toBeUndefined();
+    expect(release).not.toHaveBeenCalled();
+    // Let the shared transport settle its bounded retry after the deadline.
+    await vi.advanceTimersByTimeAsync(1_001);
+
+    expect(error).toMatchObject({
+      message: "Together video generation task video_pending timed out after 1200000ms",
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("uses Together's canonical video model ids", () => {
     expect(buildTogetherVideoGenerationProvider().models).toEqual([
       "Wan-AI/wan2.7-t2v",
@@ -303,5 +334,6 @@ testVideoGenerationDeadlines({
   providerId: "together",
   model: "Wan-AI/wan2.7-t2v",
   pendingStatus: "in_progress",
+  defaultPollingTimeoutMs: 1_200_000,
   loadPlugin: async () => (await import("./index.js")).default,
 });

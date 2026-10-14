@@ -30,8 +30,10 @@ const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/wan2.7-t2v";
 const TOGETHER_IMAGE_TO_VIDEO_MODELS = new Set(["Wan-AI/wan2.7-i2v"]);
 const TOGETHER_VIDEO_BASE_URL = "https://api.together.xyz/v2";
 const DEFAULT_TIMEOUT_MS = 120_000;
+// Live Wan 2.7 generations have taken about 10 minutes to complete.
+const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 5_000;
-const MAX_POLL_ATTEMPTS = 120;
+const MAX_POLL_ATTEMPTS = 240;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
 // Wan's documented minimum is 2s; retain OpenClaw's existing 10s ceiling.
@@ -258,7 +260,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
                 deadline:
                   deadline.deadlineAtMs === undefined
                     ? createProviderOperationDeadline({
-                        timeoutMs: DEFAULT_TIMEOUT_MS,
+                        timeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
                         label: `Together video generation task ${videoId}`,
                       })
                     : { ...deadline, label: `Together video generation task ${videoId}` },

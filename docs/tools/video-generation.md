@@ -224,8 +224,9 @@ dimensions). Providers that do not declare it surface the value via
 
 For Runway and Together, an explicit timeout covers submission, polling, and
 downloading together. Individual HTTP requests retain a 120-second limit.
-Without an explicit timeout, their 120-second polling budget starts after
-submission; request and download limits remain separate.
+Without an explicit timeout, the polling budget starts after submission:
+20 minutes for Together and 120 seconds for Runway. Request and download
+limits remain separate.
 
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
