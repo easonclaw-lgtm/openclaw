@@ -253,9 +253,9 @@ export async function readAdmittedConfigSnapshot(params: {
               if (read.snapshot.valid) {
                 await params.validateConfig?.(read.snapshot);
                 await measureDoctorConfigPreflightStep("admission.device-identity", async () => {
-                  const { loadDeviceIdentityIfPresent } =
-                    await import("../infra/device-identity.js");
-                  loadDeviceIdentityIfPresent({ env: params.env });
+                  const { loadDeviceIdentityIfPresentAsync } =
+                    await import("../infra/device-identity-async.js");
+                  await loadDeviceIdentityIfPresentAsync({ env: params.env });
                 });
               }
               return { ...read, ...(recovery ? { recovery } : {}) };

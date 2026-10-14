@@ -80,9 +80,9 @@ import {
 } from "./openclaw-state-db-startup-checkpoint.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "./openclaw-state-ownership-preflight.js";
 import {
   assertOpenClawStateWriteAllowed,
-  assertOpenClawStateWriteAllowedAtPath,
   isOpenClawStateWriteContentionError,
 } from "./openclaw-state-ownership.js";
 import {
