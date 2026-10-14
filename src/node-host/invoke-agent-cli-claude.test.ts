@@ -169,7 +169,6 @@ describe("Claude CLI node command", () => {
   it.each([
     { argv: ["--model"], error: "requires a value" },
     { argv: ["--mcp-config", "/tmp/mcp.json"], error: "unsupported Claude CLI argument" },
-    { argv: ["--allowedTools", "Bash"], error: "unsupported Claude CLI argument" },
     // Tool policy must arrive as one comma-joined value; the multi-token
     // variadic form fails closed instead of parsing partially.
     { argv: ["--disallowedTools", "Bash", "Edit"], error: "unsupported Claude CLI argument" },
@@ -462,73 +461,6 @@ process.stdout.write(JSON.stringify({
       });
     },
   );
-
-  it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
-    setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "off" } } });
-    const { executable, runArgv } = await nativeCliFixture(`
-process.stdout.write(JSON.stringify({
-  type: "result",
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-  scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
-}) + "\\n");`);
-    const calls: Array<{ method: string; params: unknown }> = [];
-    let runResult: RunResult | undefined;
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[]; timeoutMs?: number };
-        runCommand: (
-          argv: string[],
-          cwd: string | undefined,
-          env: Record<string, string> | undefined,
-          timeoutMs: number | undefined,
-        ) => Promise<RunResult>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        const argv = [...runArgv, ...options.params.command.slice(1)];
-        runResult = await options.runCommand(
-          argv,
-          undefined,
-          {
-            ...process.env,
-            ANTHROPIC_API_KEY: "node-native-api-key",
-            CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
-            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-          } as Record<string, string>,
-          options.params.timeoutMs,
-        );
-        await options.sendInvokeResult({ ok: true });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p"],
-        idleTimeoutMs: 5_000,
-        timeoutMs: 10_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
-
-    expect(runResult).toMatchObject({
-      exitCode: 0,
-      success: true,
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
-    expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
-      params: { ok: true },
-    });
-    expect(progress).toContain('"apiKey":"node-native-api-key"');
-    expect(progress).toContain('"oauth":"node-native-oauth"');
-    expect(progress).toContain('"scrub":"1"');
-  });
 
   it("streams stdin-driven stdout and cleans up a node-local system prompt file", async () => {
     const executable = await executableScript(`

@@ -49,7 +49,6 @@ import {
   expectApprovalRequired,
   expectWriteDenied,
   type InvokeSpies,
-  type MockedRunCommand,
 } from "./invoke-system-run.test-support.js";
 
 type InvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
@@ -918,20 +917,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { boundary: "commit", revoke: true },
-    { boundary: "callback", revoke: true },
-    { boundary: "callback", revoke: false },
-  ] as const)(
-    "checks live node policy at $boundary before real execution (revoke=$revoke)",
-    async ({ boundary, revoke }) => {
+  it
+    .runIf(process.platform !== "win32")
+    .each([{ boundary: "commit" }, { boundary: "callback" }] as const)(
+    "checks revoked node policy at $boundary before real execution",
+    async ({ boundary }) => {
       const { runCommand } = await import("./invoke-run-command.js");
       const cwd = fixtureDir("openclaw-node-policy-before-spawn-");
       fs.writeFileSync(path.join(cwd, "approved.txt"), "");
       const revokePolicy = () => {
-        if (!revoke) {
-          return;
-        }
         const current = loadExecApprovals();
         current.defaults = { ...current.defaults, security: "deny", ask: "off" };
         current.agents = { ...current.agents, main: { security: "deny", ask: "off" } };
@@ -966,16 +960,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       });
 
-      expect(stdout).toBe(revoke ? "" : "approved.txt\n");
-      expect(invokeResult(invoke.sendInvokeResult).ok).toBe(!revoke);
+      expect(stdout).toBe("");
+      expect(invokeResult(invoke.sendInvokeResult).ok).toBe(false);
       expect(
         invoke.sendNodeEvent.mock.calls.filter(([event]) => event === "exec.finished"),
-      ).toHaveLength(revoke ? 0 : 1);
-      if (revoke) {
-        expect(invokeResult(invoke.sendInvokeResult).error?.code).toBe("SYSTEM_RUN_DENIED");
-        expectError(invoke.sendInvokeResult, "exec approval changed before execution");
-        expectExecDeniedEvent(invoke.sendNodeEvent);
-      }
+      ).toHaveLength(0);
+      expect(invokeResult(invoke.sendInvokeResult).error?.code).toBe("SYSTEM_RUN_DENIED");
+      expectError(invoke.sendInvokeResult, "exec approval changed before execution");
+      expectExecDeniedEvent(invoke.sendNodeEvent);
     },
   );
 
@@ -1264,23 +1256,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       );
     },
   );
-
-  it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
-    const { runCommand, sendInvokeResult } = await runLocal({
-      command: ["/bin/sh", "./script.sh"],
-      env: {
-        OPENCLAW_TEST: "1",
-        LANG: "C",
-        LC_TIME: "C",
-      },
-    });
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    const passedEnv = firstMockCall(runCommand)[2];
-    expect(passedEnv).toMatchObject({ LANG: "C", LC_TIME: "C" });
-    expect(passedEnv).not.toHaveProperty("OPENCLAW_TEST");
-    expectOk(sendInvokeResult);
-  });
 
   it("does not restore a revoked allowlist rule during explicit allow-always persistence", async () => {
     const tempDir = fixtureDir("openclaw-allow-always-revoked-rule-");

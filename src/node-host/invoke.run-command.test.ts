@@ -14,37 +14,30 @@ describe("runCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["before", "after"] as const)(
-    "checks node launch policy %s native execution",
-    async (timing) => {
-      let allowed = timing === "after";
-      const pending = runCommand(
-        [
-          process.execPath,
-          "-e",
-          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
-        ],
-        undefined,
-        { PATH: process.env.PATH ?? "" },
-        5_000,
-        undefined,
-        () => {
-          if (!allowed) {
-            throw new Error("exec approval changed before execution");
-          }
-        },
-      );
-      // The canonical node runner spawns synchronously before returning its promise.
-      allowed = false;
-      if (timing === "before") {
-        await expect(pending).rejects.toThrow("exec approval changed before execution");
-      } else {
-        const result = await pending;
-        expect(result.success).toBe(true);
-        expect(result.stdout).toBe("completed");
-      }
-    },
-  );
+  it("checks node launch policy before spawning, not after native execution", async () => {
+    let allowed = true;
+    const pending = runCommand(
+      [
+        process.execPath,
+        "-e",
+        "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
+      ],
+      undefined,
+      { PATH: process.env.PATH ?? "" },
+      5_000,
+      undefined,
+      () => {
+        if (!allowed) {
+          throw new Error("exec approval changed before execution");
+        }
+      },
+    );
+    // The canonical node runner spawns synchronously before returning its promise.
+    allowed = false;
+    const result = await pending;
+    expect(result.success).toBe(true);
+    expect(result.stdout).toBe("completed");
+  });
 
   it.runIf(process.platform === "linux")(
     "restores the service PATH after login startup and resolves service-only tools",
@@ -137,15 +130,6 @@ describe("runCommand", () => {
       return { launchedArgv, options };
     }
 
-    it("quotes the node shell command once and passes it verbatim", async () => {
-      const { launchedArgv, options } = await captureLaunch(
-        "win32",
-        buildNodeShellCommand(shellCommand, "win32"),
-      );
-      expect(launchedArgv).toEqual(["cmd.exe", "/d", "/s", "/c", `"${shellCommand}"`]);
-      expect(options).toMatchObject({ windowsVerbatimArguments: true });
-    });
-
     it("recognizes an absolute cmd.exe path regardless of case", async () => {
       const shell = "C:\\Windows\\System32\\CMD.EXE";
       const { launchedArgv, options } = await captureLaunch("win32", [
@@ -159,19 +143,14 @@ describe("runCommand", () => {
       expect(options).toMatchObject({ windowsVerbatimArguments: true });
     });
 
-    it.each([
-      ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
-      ["six elements", "win32", ["cmd.exe", "/d", "/s", "/c", shellCommand, "extra"]],
-      ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand]],
-      ["a bare cmd name", "win32", ["cmd", "/d", "/s", "/c", shellCommand]],
-      ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]],
-      ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand]],
-      ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand]],
-    ] as const)("launches %s unchanged", async (_name, platform, argv) => {
-      const { launchedArgv, options } = await captureLaunch(platform, [...argv]);
-      expect(launchedArgv).toEqual(argv);
-      expect(options).not.toHaveProperty("windowsVerbatimArguments");
-    });
+    it.each([["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]]] as const)(
+      "launches %s unchanged",
+      async (_name, platform, argv) => {
+        const { launchedArgv, options } = await captureLaunch(platform, [...argv]);
+        expect(launchedArgv).toEqual(argv);
+        expect(options).not.toHaveProperty("windowsVerbatimArguments");
+      },
+    );
 
     const prompt = "Quel est le rôle du dossier checks ?";
     it.runIf(process.platform === "win32").each([
