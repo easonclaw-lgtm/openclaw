@@ -195,13 +195,10 @@ describe("node host MCP live lifecycle", () => {
     );
 
     const calling = manager.callMcpTool({ server: "docs", tool: "versioned" });
-    const descriptorAuthority = manager.descriptors;
     await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
-    listed = [{ ...tool("versioned", schemaB), outputSchema: schemaB }];
+    listed = [{ ...tool("versioned"), outputSchema: schemaB }];
     notifyToolsChanged?.();
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(manager.descriptors[0]?.parameters).toEqual(schemaB));
-    expect(manager.descriptors).toBe(descriptorAuthority);
     resolveCall?.({ content: [], structuredContent: { revision: "a" } });
 
     await expect(calling).resolves.toMatchObject({ structuredContent: { revision: "a" } });
@@ -219,6 +216,69 @@ describe("node host MCP live lifecycle", () => {
     await expect(manager.callMcpTool({ server: "docs", tool: "search" })).rejects.toMatchObject({
       code: "MCP_TOOL_UNAVAILABLE",
     });
+    await manager.close();
+  });
+
+  it("preserves Streamable HTTP response bodies in tool errors", async () => {
+    const client = createClient({
+      tools: () => [tool("fail")],
+      call: async () => {
+        throw new StreamableHTTPError(500, "Error POSTing to endpoint: bearer=body-secret");
+      },
+    });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      { createClient: () => client, resolveTransport: () => stdioTransport, warn: vi.fn() },
+    );
+
+    const error = await manager
+      .callMcpTool({ server: "docs", tool: "fail" })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "MCP_TOOL_ERROR",
+      message: "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
+    });
+    await manager.close();
+  });
+
+  it("refreshes additions, removals, and schemas without replacing descriptor authority", async () => {
+    let listed = [tool("before")];
+    let notifyToolsChanged: (() => void) | undefined;
+    const client = createClient({ tools: () => listed });
+    const onDescriptorsChanged = vi.fn();
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      {
+        createClient: (_serverName, options) => {
+          notifyToolsChanged = options.onToolsChanged;
+          return client;
+        },
+        resolveTransport: () => stdioTransport,
+        onDescriptorsChanged,
+        warn: vi.fn(),
+      },
+    );
+    const descriptorAuthority = manager.descriptors;
+
+    listed = [
+      tool("after", {
+        type: "object",
+        properties: { revision: { type: "number" } },
+        required: ["revision"],
+      }),
+    ];
+    notifyToolsChanged?.();
+
+    await vi.waitFor(() =>
+      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.tool)).toEqual(["after"]),
+    );
+    expect(manager.descriptors).toBe(descriptorAuthority);
+    expect(manager.descriptors[0]?.parameters).toEqual(listed[0]?.inputSchema);
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
+
+    notifyToolsChanged?.();
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(3));
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
     await manager.close();
   });
 
@@ -570,8 +630,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();
@@ -617,6 +686,39 @@ describe("node host MCP live lifecycle", () => {
     }
     await vi.advanceTimersByTimeAsync(60_000);
     expect(createClientMock).toHaveBeenCalledTimes(13);
+  });
+
+  it("keeps global ordering and descriptor caps after refresh", async () => {
+    let listed = [tool("initial")];
+    let notifyToolsChanged: (() => void) | undefined;
+    const crowded = createClient({ tools: () => listed });
+    const sibling = createClient({ tools: () => [tool("sibling")] });
+    const manager = await startNodeHostMcpManager(
+      { crowded: { command: "crowded" }, sibling: { command: "sibling" } },
+      {
+        createClient: (serverName, options) => {
+          if (serverName === "crowded") {
+            notifyToolsChanged = options.onToolsChanged;
+            return crowded;
+          }
+          return sibling;
+        },
+        resolveTransport: () => stdioTransport,
+        warn: vi.fn(),
+      },
+    );
+
+    listed = Array.from({ length: 130 }, (_, index) =>
+      tool(`tool-${String(index).padStart(3, "0")}`),
+    ).toReversed();
+    notifyToolsChanged?.();
+    await vi.waitFor(() => expect(manager.descriptors).toHaveLength(128));
+    expect(manager.descriptors[0]?.mcp).toEqual({ server: "crowded", tool: "tool-000" });
+    expect(manager.descriptors.at(-1)?.mcp).toEqual({ server: "crowded", tool: "tool-127" });
+    expect(manager.descriptors.some((descriptor) => descriptor.mcp?.server === "sibling")).toBe(
+      false,
+    );
+    await manager.close();
   });
 
   it("bounds initial server connection fan-out at six", async ({ onTestFinished }) => {

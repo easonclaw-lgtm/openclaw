@@ -68,6 +68,46 @@ describe("withSqliteForeignKeysDisabled", () => {
 });
 
 describe("migrateSqliteSchemaToStrict", () => {
+  it("atomically rebuilds related tables and preserves their rows", () => {
+    const database = createDatabase();
+    database.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE children (
+        id INTEGER PRIMARY KEY,
+        parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
+        score INTEGER NOT NULL
+      );
+      INSERT INTO parents (id, name) VALUES (1, 'parent');
+      INSERT INTO children (id, parent_id, score) VALUES (2, 1, 3);
+    `);
+
+    const result = migrateSqliteSchemaToStrict(
+      database,
+      `
+        CREATE TABLE IF NOT EXISTS parents (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
+          score INTEGER NOT NULL
+        ) STRICT;
+      `,
+      { databaseLabel: "test.sqlite" },
+    );
+
+    expect(result.migratedTables).toEqual(["children", "parents"]);
+    expect(readStrictFlag(database, "parents")).toBe(1);
+    expect(readStrictFlag(database, "children")).toBe(1);
+    expect(database.prepare("SELECT * FROM parents").all()).toEqual([{ id: 1, name: "parent" }]);
+    expect(database.prepare("SELECT * FROM children").all()).toEqual([
+      { id: 2, parent_id: 1, score: 3 },
+    ]);
+    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  });
+
   it("keeps database-local indexes and triggers", () => {
     const database = createDatabase();
     database.exec(`

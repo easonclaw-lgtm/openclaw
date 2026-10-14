@@ -113,6 +113,18 @@ describe("Testbox spending admission", () => {
     );
   });
 
+  it.each(["check-focused", "check-routine", "check", "check-memory", "arm", "build", "windows"])(
+    "admits a saturated %s queue without resetting the dispatch deadline",
+    (profile) => {
+      const created = Date.parse(request.createdAt);
+      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
+      expect(plan.expires_at).toBe(created + 60 * 60_000);
+      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
+        /expired/,
+      );
+    },
+  );
+
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
     expect(boundedTestboxIdleMinutes("5\n")).toBe(5);

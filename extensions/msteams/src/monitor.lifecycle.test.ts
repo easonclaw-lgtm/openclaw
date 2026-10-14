@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
@@ -70,8 +70,49 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   return registered.cfg;
 }
 
+function requireRegisteredMSTeamsMediaMaxBytes(): number {
+  const registered = createMSTeamsActivityHandler.mock.calls[0]?.[0];
+  if (!registered) {
+    throw new Error("expected registered MSTeams handler dependencies");
+  }
+  return registered.mediaMaxBytes;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(resetMSTeamsMonitorMocks);
+
+  it.each(["default", "support"])(
+    "keeps %s routing and durable ingress identity isolated",
+    async (accountId) => {
+      const abort = new AbortController();
+      const cfg = createConfig();
+      updateMSTeamsConfig(cfg, {
+        accounts: {
+          support: {
+            appId: "support-app",
+            appPassword: "support-secret",
+            webhook: { path: "/teams/support" },
+          },
+        },
+      });
+      const task = runProvider(abort, cfg, { accountId });
+      try {
+        await routeState.ready.promise;
+        expect(routeState.routes).toHaveLength(1);
+        expect(routeState.routes[0]).toMatchObject({
+          accountId,
+          path: accountId === "default" ? "/api/messages" : "/teams/support",
+        });
+        expect(getMSTeamsIngressMockState().instances.at(-1)?.options.accountId).toBe(
+          accountId === "default" ? "app-id" : "support-app",
+        );
+        expect(createMSTeamsActivityHandler.mock.calls[0]?.[0].accountId).toBe(accountId);
+      } finally {
+        abort.abort();
+        await task;
+      }
+    },
+  );
 
   it("does not reopen a retired default bot inbox through a reused logical account id", async () => {
     const abort = new AbortController();
@@ -146,6 +187,39 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     );
     expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
     expect(routeState.routes).toHaveLength(0);
+  });
+
+  it("prefers the Teams media limit over the agent default", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, { mediaMaxMb: 12 });
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = runProvider(abort, cfg);
+
+    await waitForMSTeamsTestState(() => {
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(12 * 1024 * 1024);
+
+    abort.abort();
+    await task;
+  });
+
+  it("falls back to the agent media limit when Teams has no override", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig();
+    cfg.agents = { defaults: { mediaMaxMb: 3 } };
+
+    const task = runProvider(abort, cfg);
+
+    await waitForMSTeamsTestState(() => {
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
+    });
+    expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(3 * 1024 * 1024);
+
+    abort.abort();
+    await task;
   });
 
   it("gates the real SDK token exchange route and persists its signin event", async () => {
@@ -812,10 +886,12 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     expect(routeState.unregister).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { path: "/api/:tenant/messages", accountId: "default", accountKey: undefined },
-    { path: "/healthz", accountId: "support-team", accountKey: "Support Team" },
-  ])(
+  it.each(
+    ["/api/:tenant/messages", "/healthz"].flatMap((path) => [
+      { path, accountId: "default", accountKey: undefined },
+      { path, accountId: "support-team", accountKey: "Support Team" },
+    ]),
+  )(
     "directs $accountId recovery when $path cannot serve Gateway-only callbacks",
     async ({ path, accountId, accountKey }) => {
       const cfg = createConfig();
@@ -865,32 +941,33 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     });
   });
 
-  it.each([["gzip", gzipSync]] as const)(
-    "retains %s decoding and the decoded body limit",
-    async (encoding, compress) => {
-      await withMonitor(async () => {
-        for (const [payload, status] of [
-          ["ok", 200],
-          ["x".repeat(1024 * 1024), 413],
-        ] as const) {
-          const response = await post({
-            headers: {
-              authorization: "Bearer valid-token",
-              "content-type": "application/json",
-              "content-encoding": encoding,
-            },
-            body: compress(JSON.stringify({ payload })),
-          });
-          expect(response.status).toBe(status);
-          if (status === 413) {
-            await expect(response.json()).resolves.toEqual({ error: "Payload too large" });
-          } else {
-            await response.text();
-          }
+  it.each([
+    ["gzip", gzipSync],
+    ["deflate", deflateSync],
+    ["br", brotliCompressSync],
+  ] as const)("retains %s decoding and the decoded body limit", async (encoding, compress) => {
+    await withMonitor(async () => {
+      for (const [payload, status] of [
+        ["ok", 200],
+        ["x".repeat(1024 * 1024), 413],
+      ] as const) {
+        const response = await post({
+          headers: {
+            authorization: "Bearer valid-token",
+            "content-type": "application/json",
+            "content-encoding": encoding,
+          },
+          body: compress(JSON.stringify({ payload })),
+        });
+        expect(response.status).toBe(status);
+        if (status === 413) {
+          await expect(response.json()).resolves.toEqual({ error: "Payload too large" });
+        } else {
+          await response.text();
         }
-      });
-    },
-  );
+      }
+    });
+  });
 
   it("drains active responses before releasing the route and rejects new work during stop", async () => {
     const gate = createDeferred<void>();

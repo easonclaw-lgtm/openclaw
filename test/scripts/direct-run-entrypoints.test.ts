@@ -136,6 +136,21 @@ function runShimFixture(
   );
 }
 
+function expectShimLoader(
+  result: Awaited<ReturnType<typeof runShimFixture>>,
+  loader: string,
+  nodeArgs: readonly string[] = [],
+) {
+  expect(result.error, formatShimResult(result)).toBeUndefined();
+  expect(result.status, formatShimResult(result)).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    loader,
+    dependency: "loaded",
+    args: ["--hydrated-proof", "--no-maglev"],
+    execArgv: ["--import", expect.stringMatching(/^file:.*\/scripts\/tsx\.mjs$/u), ...nodeArgs],
+  });
+}
+
 describe("script direct-run entrypoints", () => {
   it
     .skipIf(process.platform === "win32")
@@ -418,6 +433,23 @@ process.exitCode = child.status ?? 1;
     });
   });
 
+  it("runs scripts/verify-docker-attestations.mjs through its guarded CLI", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/verify-docker-attestations.mjs", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      "Usage: node scripts/verify-docker-attestations.mjs",
+    );
+  });
+
   it("runs the checked-out Crabbox wrapper through its managed child", async () => {
     await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
       const fixtureVersion = "999.0.0";
@@ -547,6 +579,20 @@ record("stdout-write-returned");
     });
   });
 
+  it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
+    const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
+    const result = await runShimFixture(
+      TSX_SHIM_WRAPPERS[1],
+      ({ checkoutRoot, fixtureRoot }) => {
+        const modulesDir = path.join(fixtureRoot, "hydrated-modules");
+        writeTsxFixture(modulesDir, "hydrated");
+        return { PNPM_CONFIG_MODULES_DIR: path.relative(checkoutRoot, modulesDir) };
+      },
+      nodeArgs,
+    );
+    expectShimLoader(result, "hydrated", nodeArgs);
+  });
+
   it("requires explicit hydration to bootstrap from primary without local modules", async () => {
     const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
       rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
@@ -578,6 +624,17 @@ record("stdout-write-returned");
       ),
     ).toBe(true);
   });
+
+  it.each(["scripts/android-app-i18n.ts", "scripts/generate-bundled-channel-config-metadata.ts"])(
+    "uses the canonical guard in %s",
+    (script) => {
+      const source = readFileSync(script, "utf8");
+
+      expect(
+        source.match(/isDirectRunUrl\(process\.argv\[1\], import\.meta\.url\)/gu),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each(["scripts/verify-docker-attestations.mjs"])(
     "routes %s through Windows CI",

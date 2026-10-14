@@ -105,6 +105,33 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(["password"] as const)(
+    "marks %s-authenticated requests as untrusted for declared HTTP scopes",
+    async (method) => {
+      vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+        ok: true,
+        method,
+      });
+
+      await expect(
+        authorizeGatewayHttpRequestOrReply({
+          req: createReq({ authorization: "Bearer secret" }),
+          res: {} as ServerResponse,
+          auth: { mode: "trusted-proxy", allowTailscale: false, token: "secret" },
+          trustedProxies: ["127.0.0.1"],
+        }),
+      ).resolves.toEqual({
+        hasCurrentClientAuthority: expect.any(Function),
+        assertCurrent: expect.any(Function),
+        revalidate: expect.any(Function),
+        authMethod: method,
+        trustDeclaredOperatorScopes: false,
+        authenticatedUserProfile: ownerProfile,
+        operatorRoleActor: { kind: "system" },
+      });
+    },
+  );
+
   it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
     "keeps trusted-proxy overrides current with runtime proxies $trustedProxies",
     async ({ trustedProxies }) => {
@@ -643,6 +670,27 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       fetchSite: "cross-site",
       allowedOrigins: ["https://control.example.com"],
       allowHostHeaderOriginFallback: false,
+    });
+  });
+
+  it("replies with auth failure and returns null when auth fails", async () => {
+    const res = {} as ServerResponse;
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+      ok: false,
+      reason: "unauthorized",
+    });
+
+    await expect(
+      authorizeGatewayHttpRequestOrReply({
+        req: createReq(),
+        res,
+        auth: { mode: "token", allowTailscale: false, token: "secret" },
+      }),
+    ).resolves.toBeNull();
+
+    expect(sendGatewayAuthFailure).toHaveBeenCalledWith(res, {
+      ok: false,
+      reason: "unauthorized",
     });
   });
 });

@@ -341,6 +341,9 @@ describe("runNodeHost", () => {
       });
 
       it.each<[string, () => unknown, Partial<Parameters<typeof runNodeHost>[0]>]>([
+        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockReturnValue(null), {}],
+        ["missing token", () => mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null), {}],
+        ["missing gateway", () => mocks.loadNodeHostConfig.mockResolvedValue(null), {}],
         [
           "mixed gateway scopes",
           () => {},
@@ -363,6 +366,9 @@ describe("runNodeHost", () => {
     });
 
     it.each([
+      ["whitespace", "  ", "\t"],
+      ["ambient token", "unrelated-gateway-token", undefined],
+      ["ambient password", undefined, "unrelated-gateway-password"],
       ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
     ])("restarts a paired service without %s", async (_source, token, password) => {
       vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);

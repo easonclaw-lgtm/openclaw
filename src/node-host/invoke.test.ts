@@ -589,21 +589,11 @@ describe("node host invoke", () => {
 
       const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
-        execPolicy?: unknown;
-        plan?: { policySnapshot?: unknown };
         allowAlwaysCoverage?: {
           complete?: boolean;
           patterns?: Array<{ pattern?: string }>;
         };
       };
-      expect(payload.execPolicy).toEqual({ security: "full", ask: "off" });
-      expect(payload.plan?.policySnapshot).toEqual({
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-        allowlistRules: [],
-      });
       expect(payload.allowAlwaysCoverage?.complete).toBe(true);
       expect(payload.allowAlwaysCoverage?.patterns?.[0]?.pattern).toBe(
         fs.realpathSync("/bin/echo"),
@@ -680,61 +670,59 @@ describe("node host invoke", () => {
     },
   );
 
-  it
-    .runIf(process.platform !== "win32")
-    .each([{ env: { PATH: "/tmp/mismatch" }, blocked: "PATH" }])(
-    "validates forwarded env overrides in system.run.prepare: $env",
-    async ({ env, blocked }) => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
-      const toolPath = path.join(tempDir, "tool");
-      fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(toolPath, 0o755);
+  it.runIf(process.platform !== "win32").each([
+    { env: { PATH: "/tmp/mismatch" }, blocked: "PATH" },
+    { env: { GIT_PAGER: "cat; id" }, blocked: "GIT_PAGER" },
+  ])("validates forwarded env overrides in system.run.prepare: $env", async ({ env, blocked }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
+    const toolPath = path.join(tempDir, "tool");
+    fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(toolPath, 0o755);
 
-      try {
-        await withEnvAsync(
-          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
-          async () => {
-            const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-            const skillBins: SkillBinsProvider = { current: async () => [] };
+    try {
+      await withEnvAsync(
+        { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+          const skillBins: SkillBinsProvider = { current: async () => [] };
 
-            await handleInvoke(
-              {
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                command: "system.run.prepare",
-                paramsJSON: JSON.stringify({
-                  command: ["tool", "--version"],
-                  rawCommand: "tool --version",
-                  env,
-                }),
-              },
-              { request } as unknown as GatewayClient,
-              skillBins,
-            );
-
-            expect(request).toHaveBeenCalledWith(
-              "node.invoke.result",
-              expect.objectContaining({
-                id: "invoke-prepare-env",
-                nodeId: "node-1",
-                ok: !blocked,
-                ...(blocked
-                  ? {
-                      error: expect.objectContaining({
-                        code: "INVALID_REQUEST",
-                        message: expect.stringContaining(`blocked override keys: ${blocked}`),
-                      }),
-                    }
-                  : {}),
+          await handleInvoke(
+            {
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              command: "system.run.prepare",
+              paramsJSON: JSON.stringify({
+                command: ["tool", "--version"],
+                rawCommand: "tool --version",
+                env,
               }),
-            );
-          },
-        );
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
+            },
+            { request } as unknown as GatewayClient,
+            skillBins,
+          );
+
+          expect(request).toHaveBeenCalledWith(
+            "node.invoke.result",
+            expect.objectContaining({
+              id: "invoke-prepare-env",
+              nodeId: "node-1",
+              ok: !blocked,
+              ...(blocked
+                ? {
+                    error: expect.objectContaining({
+                      code: "INVALID_REQUEST",
+                      message: expect.stringContaining(`blocked override keys: ${blocked}`),
+                    }),
+                  }
+                : {}),
+            }),
+          );
+        },
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("wraps malformed paramsJSON for built-in commands", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -894,7 +882,7 @@ describe("node host invoke", () => {
     );
   });
 
-  it.each(["system.run"])(
+  it.each(["system.run", "agent.cli.claude.run.v1"])(
     "executes %s with omitted exec config and full/off host approvals",
     async (command) => {
       const state = await createOpenClawTestState({ label: "node-default-policy" });
@@ -902,13 +890,21 @@ describe("node host invoke", () => {
         await state.writeConfig({});
         setRuntimeConfigSnapshot({});
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
+        const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
+        fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {
+          mode: 0o700,
+        });
         const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
         await handleInvoke(
           {
             id: "default-policy",
             nodeId: "node-1",
             command,
-            paramsJSON: JSON.stringify({ command: [process.execPath, "--version"] }),
+            paramsJSON: JSON.stringify(
+              command === "system.run"
+                ? { command: [process.execPath, "--version"] }
+                : { argv: ["-p"], timeoutMs: 5000, idleTimeoutMs: 1000 },
+            ),
           },
           {
             request: async <T>(...args: Parameters<GatewayClient["request"]>) => {
@@ -917,6 +913,8 @@ describe("node host invoke", () => {
             },
           },
           { current: async () => [] },
+          undefined,
+          { claudePath: executable },
         );
         const result = request.mock.calls.find(
           ([method]) => method === "node.invoke.result",
@@ -967,5 +965,51 @@ describe("node host invoke", () => {
     } finally {
       await state.cleanup();
     }
+  });
+
+  it("includes effective exec policy in system.run.prepare responses", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+
+    await handleInvoke(
+      {
+        id: "invoke-1",
+        nodeId: "node-1",
+        command: "system.run.prepare",
+        paramsJSON: JSON.stringify({
+          command: ["echo", "ok"],
+          rawCommand: "echo ok",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      },
+      { request } as unknown as GatewayClient,
+      skillBins,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        ok: true,
+        payloadJSON: expect.any(String),
+      }),
+    );
+    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
+      payloadJSON?: string;
+    };
+    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
+      execPolicy?: { security?: string; ask?: string };
+      plan?: { policySnapshot?: unknown };
+    };
+    expect(payload.execPolicy).toEqual({ security: "full", ask: "off" });
+    // The plan snapshot binds persisted approval state. Effective config-layer
+    // policy is returned separately above and re-evaluated at execution.
+    expect(payload.plan?.policySnapshot).toEqual({
+      security: "full",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+      allowlistRules: [],
+    });
   });
 });

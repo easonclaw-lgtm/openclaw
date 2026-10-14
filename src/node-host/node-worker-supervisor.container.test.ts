@@ -488,36 +488,42 @@ describe("node worker supervisor container isolation", () => {
     );
   });
 
-  it("refuses recovery with a different daemon target without touching its container", async () => {
-    await using fixture = containerFixture();
-    const launchId = "container-wrong-context";
-    const container = fixture.seed({ id: "d".repeat(64), launchId });
-    const { store } = await claimFixtureLaunch(fixture, launchId, container.id);
-    const replacement = createNodeWorkerSupervisor({
-      bundleRoot: fixture.bundleRoot,
-      env: fixture.env,
-      containerEngine: {
-        id: "docker",
-        command: fixture.containerEngine.command,
-        target: "d".repeat(64),
-      },
-    });
-    try {
-      await expect(replacement.initialize()).rejects.toThrow(/target|daemon|context/iu);
-      expect(await store.get(launchId)).toMatchObject({
-        state: "running",
-        container: {
-          engine: "docker",
-          engineTarget: fixture.containerEngine.target,
-          containerId: container.id,
+  it.each([
+    { mismatch: "engine", error: /engine|docker|podman/iu },
+    { mismatch: "daemon target", error: /target|daemon|context/iu },
+  ])(
+    "refuses recovery with a different $mismatch without touching its container",
+    async ({ mismatch, error }) => {
+      await using fixture = containerFixture();
+      const launchId = "container-wrong-context";
+      const container = fixture.seed({ id: "d".repeat(64), launchId });
+      const { store } = await claimFixtureLaunch(fixture, launchId, container.id);
+      const replacement = createNodeWorkerSupervisor({
+        bundleRoot: fixture.bundleRoot,
+        env: fixture.env,
+        containerEngine: {
+          id: mismatch === "engine" ? "podman" : "docker",
+          command: fixture.containerEngine.command,
+          target: mismatch === "engine" ? fixture.containerEngine.target : "d".repeat(64),
         },
       });
-      expect(fixture.exists(container.id)).toBe(true);
-      expect(fixture.events()).toEqual([]);
-    } finally {
-      await replacement.close().catch(() => undefined);
-    }
-  });
+      try {
+        await expect(replacement.initialize()).rejects.toThrow(error);
+        expect(await store.get(launchId)).toMatchObject({
+          state: "running",
+          container: {
+            engine: "docker",
+            engineTarget: fixture.containerEngine.target,
+            containerId: container.id,
+          },
+        });
+        expect(fixture.exists(container.id)).toBe(true);
+        expect(fixture.events()).toEqual([]);
+      } finally {
+        await replacement.close().catch(() => undefined);
+      }
+    },
+  );
 
   it("keeps the launch and capacity occupied when removal fails until environment teardown can retry", async () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -148,6 +149,16 @@ function registerLoadedBootstrapFilesHook(
     }
     context.bootstrapFiles = [...context.bootstrapFiles, ...files];
   });
+}
+
+async function createDirectoryAlias(params: {
+  workspaceDir: string;
+  targetDir: string;
+  aliasName: string;
+}): Promise<string> {
+  const aliasDir = path.join(params.workspaceDir, params.aliasName);
+  await fs.symlink(params.targetDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+  return aliasDir;
 }
 
 function registerBootstrapFileHook(relativePath = "BOOTSTRAP.md") {
@@ -348,9 +359,54 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
 
+  it.each(["direct", "group", "channel"] as const)(
+    "applies root-memory source privacy while keeping unrelated aliases for %s chats",
+    async (chatType) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-alias-");
+      const nestedDir = path.join(workspaceDir, "packages", "core");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
+        "private memory",
+        "utf8",
+      );
+      await fs.writeFile(path.join(nestedDir, DEFAULT_MEMORY_FILENAME), "nested memory", "utf8");
+      const rootAliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: workspaceDir,
+        aliasName: "root-memory-alias",
+      });
+      const nestedAliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: nestedDir,
+        aliasName: "nested-memory-alias",
+      });
+      const rootAliasPath = path.join(rootAliasDir, DEFAULT_MEMORY_FILENAME);
+      const nestedAliasPath = path.join(nestedAliasDir, DEFAULT_MEMORY_FILENAME);
+      registerLoadedBootstrapFilesHook([
+        path.relative(workspaceDir, rootAliasPath),
+        path.relative(workspaceDir, nestedAliasPath),
+      ]);
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+      });
+
+      if (chatType === "direct") {
+        expect(files.map((file) => file.path)).toContain(rootAliasPath);
+      } else {
+        expect(files.map((file) => file.path)).not.toContain(rootAliasPath);
+      }
+      expect(files.map((file) => file.path)).toContain(nestedAliasPath);
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     { mode: "direct", chatType: "direct", sessionKey: "agent:main:opaque:binding" },
     { mode: "group", chatType: "group", sessionKey: "agent:main:opaque:binding" },
+    { mode: "channel", chatType: "channel", sessionKey: "agent:main:opaque:binding" },
     { mode: "subagent", chatType: "direct", sessionKey: "agent:main:subagent:worker" },
     { mode: "cron", chatType: "direct", sessionKey: "agent:main:cron:daily:run:run-1" },
   ] as const)(
@@ -398,6 +454,100 @@ describe("resolveBootstrapFilesForRun", () => {
       } finally {
         release();
       }
+    },
+  );
+
+  it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
+    registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-alias-");
+    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(rootMemoryPath, "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
+  });
+
+  it("keeps missing hook records without source identity when policy allows them", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-hook-record-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "private memory", "utf8");
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "SOUL.md",
+          path: path.join(context.workspaceDir, "generated", "SOUL.md"),
+          missing: true,
+        },
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:opaque:binding",
+      chatType: "channel",
+    });
+
+    expect(files).toContainEqual({
+      name: "SOUL.md",
+      path: path.join(workspaceDir, "generated", "SOUL.md"),
+      missing: true,
+    });
+  });
+
+  it.each([
+    {
+      mode: "subagent",
+      sessionKey: "agent:main:subagent:worker",
+      relabeledName: "AGENTS.md",
+      expectedNames: ["AGENTS.md"],
+    },
+    {
+      mode: "cron",
+      sessionKey: "agent:main:cron:daily:run:run-1",
+      relabeledName: "SOUL.md",
+      expectedNames: ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"],
+    },
+  ] as const)(
+    "rejects loader aliases to root memory relabeled under the $mode allowlist",
+    async ({ sessionKey, relabeledName, expectedNames }) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-restricted-");
+      const rootMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
+      const aliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: workspaceDir,
+        aliasName: "root-memory-alias",
+      });
+      registerLoadedBootstrapFilesHook(
+        [path.relative(workspaceDir, path.join(aliasDir, DEFAULT_MEMORY_FILENAME))],
+        relabeledName,
+      );
+      await Promise.all(
+        [
+          ["AGENTS.md", "project rules"],
+          ["SOUL.md", "persona"],
+          ["IDENTITY.md", "identity"],
+          ["USER.md", "user profile"],
+          ["MEMORY.md", "memory"],
+          ["HEARTBEAT.md", "heartbeat"],
+          ["BOOTSTRAP.md", "setup"],
+        ].map(([fileName, content]) =>
+          fs.writeFile(
+            path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+            expectDefined(content, "content test invariant"),
+            "utf8",
+          ),
+        ),
+      );
+
+      const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+      expect(files.map((file) => file.name)).toStrictEqual(expectedNames);
+      expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
     },
   );
 });

@@ -49,6 +49,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
@@ -461,6 +462,21 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(dirty.stderr).toContain("working-tree changes");
   });
 
+  it("allows an overweight lane to start alone under low parallelism", () => {
+    expect(
+      canStartSchedulerLane(
+        {
+          name: "install-e2e",
+          resources: ["npm"],
+          weight: 4,
+        },
+        activePool(),
+        2,
+        limits,
+      ),
+    ).toBe(true);
+  });
+
   it("validates complete candidate fields against HEAD and tarball bytes", () => {
     const fixture = candidateFixture();
     const plan = candidatePlan();
@@ -569,6 +585,53 @@ describe("scripts/test-docker-all scheduler", () => {
     ] as const) {
       expect(command).toContain(`${key}='${env[key]}'`);
     }
+  });
+
+  it("plans from an isolated release harness with source-checkout TypeScript support", () => {
+    const artifactRoot = path.resolve(".artifacts");
+    mkdirSync(artifactRoot, { recursive: true });
+    const root = tempDirs.make("openclaw-docker-plan-isolated-harness-", artifactRoot);
+    const scriptsDir = copyDockerSchedulerHarness(root);
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptsDir, "test-docker-all.mjs"), "--plan-json"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
+          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
+          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      profile: "release-path",
+      lanes: expect.arrayContaining([
+        expect.objectContaining({ name: "published-upgrade-survivor-legacy-operator-state" }),
+      ]),
+    });
+  });
+
+  it("rejects loose numeric runner env vars without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--plan-json"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_PARALLELISM: "1e3",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
+    expect(result.stderr).not.toContain("at ");
   });
 
   it("reuses only registry-backed images in generated workflow reruns", () => {
@@ -926,6 +989,10 @@ process.exit(0);
     ).toBe(false);
   });
 
+  it("serializes live OpenAI Docker lanes by default", () => {
+    expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
+  });
+
   it("cleans stale stopped containers from all named Docker E2E lanes", () => {
     expect(
       dockerPreflightContainerNames(`
@@ -1045,6 +1112,24 @@ postgres Created
     },
   );
 
+  posixIt("clamps oversized shell command timers before scheduling", async () => {
+    const result = await runShellCommand({
+      command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "setTimeout(() => process.exit(0), 25);",
+      )}`,
+      env: process.env,
+      label: "oversized-command-timeout",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toMatchObject({
+      noOutputTimedOut: false,
+      status: 0,
+      timedOut: false,
+    });
+  });
+
   posixIt("clamps oversized shell command no-output timers before scheduling", async () => {
     const result = await runShellCommand({
       command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
@@ -1058,6 +1143,23 @@ postgres Created
 
     expect(result).toMatchObject({
       noOutputTimedOut: false,
+      status: 0,
+      timedOut: false,
+    });
+  });
+
+  posixIt("clamps oversized shell capture timers before scheduling", async () => {
+    const result = await runShellCaptureCommand({
+      command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        "setTimeout(() => process.exit(0), 25);",
+      )}`,
+      env: process.env,
+      label: "oversized-capture-timeout",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toMatchObject({
       status: 0,
       timedOut: false,
     });
