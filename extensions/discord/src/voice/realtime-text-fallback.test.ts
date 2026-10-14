@@ -3,7 +3,10 @@ import { vi } from "vitest";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 const { sendMessageDiscord } = vi.hoisted(() => ({ sendMessageDiscord: vi.fn() }));
-vi.mock("../send.outbound.js", () => ({ sendMessageDiscord }));
+vi.mock("../send.outbound.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.outbound.js")>()),
+  sendMessageDiscord,
+}));
 
 defineDiscordVoiceTests(
   ({
