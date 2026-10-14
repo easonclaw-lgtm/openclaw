@@ -2645,7 +2645,8 @@ the consuming phase rereads current policy through that plan instead of repeatin
 discovery. These changes preserve current-row predicates and final effect checks.
 
 Initial manager hydration, persisted-user replay, and bootstrap message presence
-share one fresh history cohort. A message in the bounded payload proves physical
+share one fresh history cohort. A context window starting at active position zero
+has no preceding cache-TTL prefix and skips that query. A message in the bounded payload proves physical
 message presence in that snapshot; a window without messages still uses the
 physical-history probe because resets can hide retained messages. After hooks or compaction, replay acquires its
 next cohort at synchronous prompt admission. Bounded model context retains its separate
