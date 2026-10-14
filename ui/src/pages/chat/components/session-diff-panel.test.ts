@@ -10,6 +10,7 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
 import { SessionDiffPanel } from "./session-diff-panel.ts";
 import type {
   SessionDiffFileTextLoader,
@@ -448,6 +449,97 @@ describe("SessionDiffPanel", () => {
 });
 
 describe("manual code folding", () => {
+  it("defers changed-source analysis while a file is collapsed and reuses prepared syntax", async () => {
+    const analyze = vi.spyOn(diffSyntax, "analyzeDiffSyntax");
+    const patch = "@@ -1,3 +1,3 @@\n function greet() {\n-  return 1;\n+  return 2;\n }";
+    let current = {
+      ...fileResult(patch),
+      files: [{ ...fileResult(patch).files[0]!, path: "example.ts" }],
+    };
+    const panel = mountPanel();
+    panel.loader = async () => current;
+    const click = (selector: string) => panel.querySelector<HTMLButtonElement>(selector)!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__code-toggle")).not.toBeNull(),
+    );
+    expect(analyze).toHaveBeenCalledTimes(1);
+    click(".session-diff__file-toggle");
+    flush();
+    current = {
+      ...current,
+      files: [{ ...current.files[0]!, patch: patch.replace("return 2", "return 3") }],
+    };
+    click(".session-diff__refresh");
+    await settlePanel(panel);
+    await vi.dynamicImportSettled();
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(panel.querySelector(".session-diff__file-body")).toBeNull();
+    click(".session-diff__file-toggle");
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__code-toggle")).not.toBeNull(),
+    );
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(panel.textContent).toContain("return 3;");
+    click(".session-diff__code-toggle");
+    flush();
+    click(".session-diff__file-toggle");
+    flush();
+    click(".session-diff__refresh");
+    await settlePanel(panel);
+    await vi.dynamicImportSettled();
+    click(".session-diff__file-toggle");
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__code-placeholder")).not.toBeNull(),
+    );
+    await vi.dynamicImportSettled();
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(panel.textContent).not.toContain("return 3;");
+  });
+
+  it("refreshes metadata when a truncated file still has no patch", async () => {
+    let current: SessionsDiffResult = {
+      ...result("feature/test"),
+      additions: 100001,
+      files: [
+        {
+          path: "large.ts",
+          status: "added",
+          additions: 100001,
+          deletions: 0,
+          untracked: true,
+          truncated: true,
+        },
+      ],
+    };
+    const panel = mountPanel();
+    panel.loader = async () => current;
+    await settlePanel(panel);
+    expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
+      "+100001",
+    );
+    expect(panel.querySelector(".session-diff__badge")).not.toBeNull();
+    const originalToggle = panel.querySelector(".session-diff__file-toggle");
+    current = {
+      ...current,
+      additions: 100010,
+      deletions: 2,
+      files: [
+        { path: "large.ts", status: "modified", additions: 100010, deletions: 2, truncated: true },
+      ],
+    };
+    panel.querySelector<HTMLButtonElement>(".session-diff__refresh")!.click();
+    await settlePanel(panel);
+    expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
+      "+100008",
+    );
+    expect(panel.querySelector(".session-diff__file .chat-diffstat__mod")?.textContent).toBe("~2");
+    expect(panel.querySelector(".session-diff__file")?.getAttribute("data-status")).toBe(
+      "modified",
+    );
+    expect(panel.querySelector(".session-diff__badge")).toBeNull();
+    expect(panel.querySelector(".session-diff__file-toggle")).toBe(originalToggle);
+  });
+
   it("removes folded rows, retains layout state, and resets only when source changes", async () => {
     localStorage.setItem(
       "openclaw.control.sessionDiff.v1",

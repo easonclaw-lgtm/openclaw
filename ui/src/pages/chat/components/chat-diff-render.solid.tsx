@@ -38,6 +38,7 @@ export function DiffStatChips(props: { stat: DiffStat & { modified?: number } })
 }
 
 export function createDiffPresentation(props: {
+  active?: boolean;
   lines: readonly DiffLine[];
   file: DiffFilePaths;
   rows?: readonly SessionSplitDiffRow[];
@@ -90,7 +91,7 @@ export function createDiffPresentation(props: {
   onCleanup(() => {
     generation += 1;
   });
-  const syntaxTarget = createMemo(
+  const syntaxSource = createMemo(
     () => ({
       lines: sourceLines(),
       path: props.file.path,
@@ -103,16 +104,26 @@ export function createDiffPresentation(props: {
         previous.oldPath === next.oldPath,
     },
   );
-  createEffect(syntaxTarget, ({ lines, path, oldPath }) => {
+  const syntaxTarget = createMemo(() => (props.active === false ? null : syntaxSource()));
+  let prepared: ReturnType<typeof syntaxSource> | null = null;
+  createEffect(syntaxTarget, (target) => {
     const request = ++generation;
+    // Disclosure parks prepared syntax and manual folds without doing hidden work.
+    if (!target || prepared === target) {
+      return;
+    }
+    const { lines, path, oldPath } = target;
     setHighlighted(new Map());
     setSyntaxFolds([]);
     void import("./chat-diff-highlight.runtime.ts")
-      .then(({ analyzeDiffSyntax }) => analyzeDiffSyntax(lines, path, oldPath))
-      .then(({ highlighted: tokens, folds }) => {
-        if (generation === request) {
-          setHighlighted(tokens);
-          setSyntaxFolds(folds);
+      .then(({ analyzeDiffSyntax }) =>
+        generation === request ? analyzeDiffSyntax(lines, path, oldPath) : null,
+      )
+      .then((result) => {
+        if (result && generation === request) {
+          prepared = target;
+          setHighlighted(result.highlighted);
+          setSyntaxFolds(result.folds);
         }
       })
       .catch(() => {

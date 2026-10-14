@@ -333,6 +333,7 @@ suite.define(() => {
           path.join(suite.artifactDir, "proof.json"),
           JSON.stringify(report, null, 2),
         );
+        console.info("Session diff folding proof.json:", JSON.stringify(report));
       },
     );
   }, 120_000);
