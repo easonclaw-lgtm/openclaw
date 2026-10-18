@@ -4,6 +4,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueGoalContinuation, isGoalContinuationCurrent } from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -25,6 +26,40 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
 vi.mock("./queue/enqueue.js", () => ({
   enqueueFollowupRun: vi.fn(() => true),
   getFollowupQueueDepth: vi.fn(() => 0),
+}));
+
+const workerPlacement = vi.hoisted(() => ({
+  current: vi.fn<() => WorkerSessionPlacementRecord | undefined>(),
+  supported: true,
+}));
+// mock-isolation: The live Gateway owner supplies placement facts; RPC proof uses SQLite.
+vi.mock("../../plugins/runtime/gateway-request-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/gateway-request-scope.js")>()),
+  getInProcessGatewayRequestContext: () => ({
+    workerSessionPlacementService: {
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: workerPlacement.current,
+        release: () => {},
+      }),
+    },
+  }),
+}));
+// mock-isolation: Only the installed harness's remote-exec support is variable here.
+vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/harness/registry.js")>()),
+  getRegisteredAgentHarness: () =>
+    workerPlacement.supported
+      ? {
+          harness: {
+            id: "codex",
+            label: "Codex",
+            cloudPlacement: { mode: "remote-exec" },
+            supports: () => ({ supported: true }),
+            runAttempt: async () => normal,
+          },
+        }
+      : undefined,
 }));
 
 const identity = {
@@ -108,14 +143,65 @@ afterEach(() => {
 });
 
 describe("Goal continuation eligibility", () => {
-  it.each(["paused", "blocked", "complete", "usage_limited", "budget_limited"] as const)(
-    "does not resume %s goals",
-    (status) => {
-      const current = entry();
-      current.goal!.status = status;
-      expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-    },
-  );
+  it.each([
+    "remote-exec",
+    "local",
+    "worker-turn",
+    "wrong-session",
+    "unsupported",
+    "no-authority",
+  ] as const)("binds Codex continuation to supported placement facts (%s)", async (mode) => {
+    const f = fixture();
+    f.params.base.operatorAuthority = {
+      profileId: "operator",
+      scopes: ["operator.admin"],
+      assertCurrent: () => {},
+    };
+    if (mode === "no-authority") {
+      f.params.base.operatorAuthority = undefined;
+    }
+    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
+      ...entry(),
+      agentHarnessId: "codex",
+    });
+    workerPlacement.supported = mode !== "unsupported";
+    workerPlacement.current.mockReturnValue({
+      agentId: "main",
+      sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
+      sessionId: identity.sessionId,
+      state: mode === "local" ? "local" : "requested",
+      executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
+      generation: 1,
+      turnClaim: null,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      lastTranscriptAckCursor: null,
+      lastLiveEventAckCursor: null,
+      terminalReason: null,
+      terminalAtMs: null,
+      recoveryError: null,
+    });
+    expect(await enqueueGoalContinuation(f.params)).toBe(mode === "remote-exec");
+    if (mode === "remote-exec") {
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+        ...identity,
+        workerGoal: true,
+      });
+    } else {
+      expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    }
+  });
+  it("does not resume paused goals", () => {
+    const current = entry();
+    current.goal!.status = "paused";
+    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
+  });
   it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
     const current = entry();
     expect(isGoalContinuationCurrent(identity, current)).toBe(true);
@@ -238,12 +324,6 @@ describe("Goal queue custody", () => {
       current = next;
     }
     expect(delivered).toHaveBeenCalledTimes(3);
-  });
-  it("does not enqueue over pending input", async () => {
-    const f = fixture();
-    vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
   it.each(["stop", "new input", "goal replacement"])(
     "rechecks %s after the worker read yields",

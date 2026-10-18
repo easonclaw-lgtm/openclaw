@@ -131,8 +131,6 @@ function runDevicePairingStoreMutation<T>(
       if (result.mutated) {
         // Transaction-local reads bypass the cache; only real commits invalidate it.
         stageSqliteTransactionState(transactionDatabase.db, {
-          stage: () => undefined,
-          rollback: () => undefined,
           commit: () => {
             invalidateDevicePairingStoreCache(transactionDatabase);
             invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
@@ -244,7 +242,7 @@ export function readDevicePairingStoreSnapshotFromDatabase(
   };
 }
 
-export function readPairedDevicePairingRecordsFromDatabase(
+function readPairedDevicePairingRecordsFromDatabase(
   db: EngineConnection,
 ): Record<string, PairedDevice> {
   const paired = transactionPairedRecords(db);

@@ -95,8 +95,12 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
             {(action) => (
               <button
                 type="button"
-                class={action === "approve" ? "btn btn--sm primary" : "btn btn--sm"}
-                disabled={Boolean(props.channels.pairingBusyRequestId) || !props.canManagePairing}
+                class={["btn btn--sm", { primary: action === "approve" }]}
+                disabled={
+                  !props.channels.connected ||
+                  Boolean(props.channels.pairingBusyRequestId) ||
+                  !props.canManagePairing
+                }
                 aria-label={t(`channels.pairing.${action}Aria`, {
                   sender: request().senderId,
                   channel: request().channelLabel,
@@ -150,7 +154,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
     ),
   );
   return (
-    <div id="channels-pairing-requests">
+    <div id="channels-pairing-requests" ref={(element) => props.onPairingRoot(element)}>
       <SettingsSection
         title={t("channels.pairing.title")}
         description={t("channels.pairing.subtitle")}
@@ -158,7 +162,9 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
         actions={
           <ChannelRefresh
             updatedAt={props.canManagePairing ? props.channels.pairingLastSuccess : null}
-            disabled={props.channels.pairingLoading || !props.canManagePairing}
+            disabled={
+              !props.channels.connected || props.channels.pairingLoading || !props.canManagePairing
+            }
             onRefresh={props.onPairingRefresh}
           />
         }
@@ -337,11 +343,11 @@ function PairingPromptContent(params: {
         {approving() && ownerMissing() && !params.props.canAdmin ? (
           <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
         ) : undefined}
-        <div class="channels-pairing-dialog__actions">
+        <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={approving() ? "btn primary" : "btn danger"}
-            disabled={busy()}
+            class={["btn", approving() ? "primary" : "danger"]}
+            disabled={!params.props.channels.connected || busy()}
             onClick={() => params.props.onPairingPromptConfirm()}
           >
             {t(`channels.pairing.${params.prompt.kind}`)}
@@ -354,7 +360,7 @@ function PairingPromptContent(params: {
           >
             {t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

@@ -1,26 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
 
 type Listener = (filename?: string) => void;
 type Directory = {
   path: string;
-  listeners: Map<Listener, number>;
+  listeners: Set<Listener>;
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
-type Source = { path: string; watcher: fs.FSWatcher; directories: Set<Directory> };
+type Source = { path: string; watcher: DirectoryWatch; directories: Set<Directory> };
 
 const directories = new Map<string, Directory>();
 const sources = new Map<string, Source>();
 let fallback: ReturnType<typeof setTimeout> | undefined;
 let fallbackDueAtMs = Infinity;
 const REPAIR_INTERVAL_MS = 30_000;
-const RECOVERY_INTERVAL_MS = 300_000;
 
-function nextFallback(intervalMs: number): Directory["nextFallback"] {
+function nextFallback(): Directory["nextFallback"] {
   const now = Date.now();
-  const atMs = (Math.floor(now / intervalMs) + 1) * intervalMs;
+  const atMs = (Math.floor(now / REPAIR_INTERVAL_MS) + 1) * REPAIR_INTERVAL_MS;
   return { atMs, elapsedAtMs: performance.now() + atMs - now };
 }
 
@@ -37,12 +37,6 @@ function retainEarlierFallback(directory: Directory, deadline: Directory["nextFa
     directory.nextFallback.elapsedAtMs,
     deadline.elapsedAtMs,
   );
-}
-
-function fallbackInterval(directory: Directory): number {
-  return directory.source?.path === directory.path
-    ? Math.min(RECOVERY_INTERVAL_MS, ...directory.listeners.values())
-    : REPAIR_INTERVAL_MS;
 }
 
 function scheduleFallback(changed?: Directory) {
@@ -72,7 +66,7 @@ function scheduleFallback(changed?: Directory) {
             attach(entry);
           }
           // Native events are primary; recovery covers missed notifications.
-          entry.nextFallback = nextFallback(fallbackInterval(entry));
+          entry.nextFallback = nextFallback();
           notify(entry);
         }
         scheduleFallback();
@@ -92,10 +86,20 @@ function detach(directory: Directory) {
 }
 
 function notify(directory: Directory, filename?: string) {
-  const listeners = Array.from(directory.listeners.keys());
+  const listeners = Array.from(directory.listeners);
   for (const listener of listeners) {
     listener(filename);
   }
+}
+
+// libuv aborts the process when a Windows directory watch was opened through an
+// 8.3 short path (e.g. C:\Users\RUNNER~1\...) and a child event resolves to its
+// long form (libuv/libuv#5010, fixed upstream by libuv/libuv#5152 but not yet in
+// shipped Node). Watch the long form; the short spelling stays the shared key.
+function watchPath(candidate: string): string {
+  return process.platform === "win32" && candidate.includes("~")
+    ? fs.realpathSync.native(candidate)
+    : candidate;
 }
 
 function attach(directory: Directory) {
@@ -109,30 +113,35 @@ function attach(directory: Directory) {
     }
     try {
       const watcher = runInDetachedAsyncContext(() =>
-        fs.watch(candidate, { persistent: false }, (event, filename) => {
+        watchDirectory(watchPath(candidate), (event, filename) => {
           const source = sources.get(candidate);
           if (!source || source.watcher !== watcher) {
             return;
           }
           const affected = [...source.directories];
           for (const entry of affected) {
-            notify(
-              entry,
-              entry.path === candidate ? (filename?.toString() ?? undefined) : undefined,
-            );
+            notify(entry, entry.path === candidate ? filename : undefined);
           }
           // A renamed directory's watcher can remain bound to its retired inode.
           // Child-file renames do not retire the directory or its queued events.
           if (event === "rename") {
             const renamedRoot = !filename || filename === path.basename(candidate);
-            const readmit = affected.filter((entry) => renamedRoot || entry.path !== candidate);
+            // An absent directory waits on its nearest ancestor. Only the next segment
+            // toward it can move that attach point; closing a native watch for other
+            // children (SQLite sidecars) can block the main thread for seconds on macOS.
+            const readmit = affected.filter(
+              (entry) =>
+                renamedRoot ||
+                (entry.path !== candidate &&
+                  path.relative(candidate, entry.path).split(path.sep, 1)[0] === filename),
+            );
             for (const entry of readmit) {
               detach(entry);
             }
             for (const entry of readmit) {
               if (directories.get(entry.path) === entry) {
                 attach(entry);
-                retainEarlierFallback(entry, nextFallback(fallbackInterval(entry)));
+                retainEarlierFallback(entry, nextFallback());
                 scheduleFallback(entry);
               }
             }
@@ -147,7 +156,7 @@ function attach(directory: Directory) {
         for (const entry of affected) {
           detach(entry);
           notify(entry);
-          retainEarlierFallback(entry, nextFallback(REPAIR_INTERVAL_MS));
+          retainEarlierFallback(entry, nextFallback());
           scheduleFallback(entry);
         }
       });
@@ -166,14 +175,13 @@ function attach(directory: Directory) {
 export function observeOwnedDirectory(
   directoryPath: string,
   onChange: Listener,
-  options?: { recoveryIntervalMs?: 30_000 },
 ): { close(): void } {
   const key = path.resolve(directoryPath);
   let directory = directories.get(key);
   if (!directory) {
     directory = {
       path: key,
-      listeners: new Map(),
+      listeners: new Set(),
       nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
     };
     directories.set(key, directory);
@@ -181,8 +189,8 @@ export function observeOwnedDirectory(
   }
   const selected = directory;
   const listener: Listener = (filename) => onChange(filename);
-  selected.listeners.set(listener, options?.recoveryIntervalMs ?? RECOVERY_INTERVAL_MS);
-  retainEarlierFallback(selected, nextFallback(fallbackInterval(selected)));
+  selected.listeners.add(listener);
+  retainEarlierFallback(selected, nextFallback());
   scheduleFallback(selected);
   return {
     close() {
